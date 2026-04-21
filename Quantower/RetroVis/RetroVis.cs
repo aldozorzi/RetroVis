@@ -45,6 +45,9 @@ public class RetroVis : Indicator
 
     double currentDelta = 0;
 
+    private List<RectangleF> matchClickAreas = new List<RectangleF>();
+    private List<string> matchDates = new List<string>();
+
     #endregion
 
     public RetroVis() : base()
@@ -216,6 +219,9 @@ public class RetroVis : Indicator
         gr.DrawString(deltaText, titleFont, deltaBrush, tx + titleWidth, ty);
         ty += 30;
 
+        matchClickAreas.Clear();
+        matchDates.Clear();
+
         foreach (var m in results)
         {
             // Reintegro la normalizzazione della distanza in percentuale
@@ -225,6 +231,14 @@ public class RetroVis : Indicator
             double eodPts = (m.EodReturn / 100.0) * currentPriceBase;
             double mfePts = (m.Mfe / 100.0) * currentPriceBase;
             double maePts = (m.Mae / 100.0) * currentPriceBase;
+
+            // link rects for click
+            float rowWidth = 250f;
+            float rowHeight = 18f + 25f;
+            RectangleF clickRect = new RectangleF(tx, ty, rowWidth, rowHeight);
+
+            matchClickAreas.Add(clickRect);
+            matchDates.Add(m.Date);
 
             // 1. Riga intestazione: Data, Ora e Similarità (Match %)
             string header = $"{m.Date} {m.Time} | Match: {similarity:F1}%";
@@ -262,11 +276,52 @@ public class RetroVis : Indicator
             Brush maeBrush = maePts <= 0 ? Brushes.Red : Brushes.LimeGreen;
             gr.DrawString(maeTxt, dataFont, maeBrush, currentX, ty);
 
+
             ty += 25;
         }
     }
 
-    private void OnChartClick(object sender, ChartMouseNativeEventArgs e) => isPanelVisible = toggleRect.Contains(e.Location) ? !isPanelVisible : isPanelVisible;
+    private void OnChartClick(object sender, ChartMouseNativeEventArgs e)
+    {
+        // 1. Gestione Toggle Pannello (Tua logica esistente)
+        if (toggleRect.Contains(e.Location))
+        {
+            isPanelVisible = !isPanelVisible;
+            return; // Esci subito dopo il toggle
+        }
+
+        // 2. Gestione Link Storici (Solo se il pannello è aperto)
+        if (isPanelVisible)
+        {
+            for (int i = 0; i < matchClickAreas.Count; i++)
+            {
+                if (matchClickAreas[i].Contains(e.Location))
+                {
+                    string date = matchDates[i];
+                    // Inverti il simbolo se necessario, o usa Symbol.Name
+                    string symbol = this.Symbol.Name.Contains("MNQ") ? "NQ" : "NQ";
+
+                    string url = $"http://127.0.0.1:9999/visualize?symbol={symbol}&date={date}";
+
+                    try
+                    {
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = url,
+                            UseShellExecute = true
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        Log("Errore apertura browser: " + ex.Message);
+                    }
+
+                    break; // Clic intercettato, non serve controllare altri match
+                }
+            }
+        }
+    }
+
 
     protected override void OnClear()
     {

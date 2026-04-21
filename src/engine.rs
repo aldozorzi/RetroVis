@@ -115,4 +115,21 @@ impl SearchEngine<f32> {
         outcomes.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
         outcomes.into_iter().take(top_k).collect()
     }
+
+    pub fn get_day_candles(&self, date: &str) -> Vec<crate::models::ChartDataResponse> {
+    // Cerchiamo la giornata che corrisponde esattamente alla stringa passata (es: "2024-04-21")
+    self.dataset.iter()
+        .find(|d| d.date == date)
+        .map(|d| {
+            d.candles.iter().map(|c| crate::models::ChartDataResponse {
+                // Uniamo data e ora per il frontend: "2024-04-21 09:30:00"
+                time: format!("{} {}", c.date, c.time), 
+                open: c.open,
+                high: c.high,
+                low: c.low,
+                close: c.close,
+            }).collect()
+        })
+        .unwrap_or_else(Vec::new)
+}
 }

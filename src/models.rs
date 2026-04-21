@@ -86,3 +86,12 @@ pub struct AppState {
     pub engines: HashMap<String, SearchEngine<f32>>,
     pub sessions: HashMap<String, SessionConfig>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct ChartDataResponse {
+    pub time: String,
+    pub open: f32,
+    pub high: f32,
+    pub low: f32,
+    pub close: f32,
+}
