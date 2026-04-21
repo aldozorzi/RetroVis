@@ -67,6 +67,7 @@ async fn search_handler(
     println!("Simbolo: {}", payload.symbol);
     println!("Sessione: {}", payload.session_id);
     println!("Numero candele inviate: {}", payload.candles.len());
+    println!("Span: {} - {}", payload.candles.first().unwrap().time, payload.candles.last().unwrap().time);
     
     if let Some(first) = payload.candles.first() {
         println!("Prima candela inviata: {} {}", first.date, first.time);

@@ -20,6 +20,9 @@ public class RetroVis : Indicator
     [InputParameter("Min Candles for Pattern", 1, 1, 10, 1)]
     public int MinCandles = 3;
 
+    [InputParameter("Max Candles for Pattern", 1, 1, 10, 1)]
+    public int MaxCandles = 6;
+
     [InputParameter("Webserver URL", 2)]
     public string ServerUrl = "http://127.0.0.1:9999/search";
     #endregion
@@ -39,6 +42,8 @@ public class RetroVis : Indicator
 
     private static TimeZoneInfo NyTz ;
     private static TimeZoneInfo LondonTz;
+
+    double currentDelta = 0;
 
     #endregion
 
@@ -71,12 +76,29 @@ public class RetroVis : Indicator
         
     }
 
+    protected override void OnSettingsUpdated()
+    {
+        base.OnSettingsUpdated();
+
+        // 1. Azzeriamo il tempo dell'ultima barra elaborata per forzare il passaggio dell'IF
+        this.lastProcessedBarTime = default(DateTime);
+
+        // 2. Azzeriamo il tuo contatore interno
+        this.currentCandleCount = -1;
+
+        // Opzionale: Se vuoi un feedback visivo immediato
+        // Log.Info("Parametri aggiornati: ricaricamento pattern...");
+    }
+
     protected override void OnUpdate(UpdateArgs args)
     {
+        currentDelta = Close(0) - currentPriceBase;
+
         DateTime currentBarTime = Time();
         if (currentBarTime == lastProcessedBarTime) return;
         // Filtro real-time
         HistoryAggregationTime aggregation = (HistoryAggregationTime)this.HistoricalData.Aggregation;
+
         if (currentBarTime.ToUniversalTime() < DateTime.UtcNow.AddMinutes(-aggregation.Period.Duration.TotalMinutes))
             return;
 
@@ -87,7 +109,7 @@ public class RetroVis : Indicator
         // Parametri orario in base alla sessione
 
         effectiveSession = (SessionId == "AUTO")
-            ? (TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NyTz).Hour < 8 ? "LONDON_OPEN" : "NY_OPEN")
+            ? ((TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NyTz).Hour < 9 || (TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NyTz).Hour == 9 && TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NyTz).Minute < 30)) ? "LONDON_OPEN" : "NY_OPEN")
             : SessionId;
 
         
@@ -112,10 +134,10 @@ public class RetroVis : Indicator
         if (openBarIndex == -1 || openBarIndex < MinCandles) return;
 
         var candlesToInquire = new List<RawCandle>();
-        // Prendiamo le candele dall'apertura fino alla corrente (max 6)
-        int limit = Math.Min(openBarIndex + 1, 6);
+        // Prendiamo le candele dall'apertura fino alla corrente (max MaxCandles)
+        int limit = Math.Min(openBarIndex, MaxCandles);
 
-        for (int i = openBarIndex; i > (openBarIndex - limit); i--)
+        for (int i = openBarIndex; i >= 1 && i > (openBarIndex - limit); i--)
         {
             DateTime bTime = TimeZoneInfo.ConvertTimeFromUtc(Time(i).ToUniversalTime(), NyTz);
             candlesToInquire.Add(new RawCandle
@@ -129,8 +151,9 @@ public class RetroVis : Indicator
                 Volume = (float)Volume(i)
             });
         }
-
+        
         currentPriceBase = Open(openBarIndex);
+        Log("openBarIndex" + openBarIndex + "currentPriceBase: " + currentPriceBase);
         this.currentCandleCount = candlesToInquire.Count;
         _ = FetchMatchesAsync(candlesToInquire);
     }
@@ -173,8 +196,8 @@ public class RetroVis : Indicator
 
     private void DrawResultsPanel(Graphics gr)
     {
-        Rectangle panelRect = new Rectangle(toggleRect.X, toggleRect.Y + 35, 320, 260);
-        gr.FillRectangle(new SolidBrush(Color.FromArgb(100, 10, 10, 10)), panelRect);
+        Rectangle panelRect = new Rectangle(toggleRect.X, toggleRect.Y + 35, 380, 260);
+        gr.FillRectangle(new SolidBrush(Color.FromArgb(200, 10, 10, 10)), panelRect);
 
         int tx = panelRect.X + 12, ty = panelRect.Y + 12;
         if (results == null || results.Count == 0)
@@ -182,15 +205,21 @@ public class RetroVis : Indicator
             gr.DrawString("WAITING FOR DATA...", titleFont, Brushes.Gray, tx, ty);
             return;
         }
+        string deltaSign = currentDelta >= 0 ? "+" : "";
+        string deltaText = $" | NOW: {deltaSign}{currentDelta:F1}";
+        Brush deltaBrush = currentDelta >= 0 ? Brushes.LimeGreen : Brushes.Red;
 
-        string dynamicTitle = $"{SessionId} - TOP MATCHES ({this.currentCandleCount} CANDLES)";
+
+        string dynamicTitle = $"{effectiveSession} - TOP MATCHES ({this.currentCandleCount} CANDLES)";
         gr.DrawString(dynamicTitle, titleFont, Brushes.White, tx, ty);
+        float titleWidth = gr.MeasureString(dynamicTitle, titleFont).Width;
+        gr.DrawString(deltaText, titleFont, deltaBrush, tx + titleWidth, ty);
         ty += 30;
 
         foreach (var m in results)
         {
             // Reintegro la normalizzazione della distanza in percentuale
-            float similarity = Math.Max(0, (1.0f - m.Distance) * 100f);
+            float similarity = 1.0f / (1.0f + m.Distance) * 100f;
 
             // Calcolo valori assoluti in punti
             double eodPts = (m.EodReturn / 100.0) * currentPriceBase;
@@ -218,7 +247,7 @@ public class RetroVis : Indicator
 
             // --- MFE ---
             string mfeTxt = $"UP: {mfePts:+0.0}";
-            // L'MFE è solitamente positivo (escursione massima a favore)
+
             Brush mfeBrush = mfePts >= 0 ? Brushes.LimeGreen : Brushes.Red;
             gr.DrawString(mfeTxt, dataFont, mfeBrush, currentX, ty);
             currentX += gr.MeasureString(mfeTxt, dataFont).Width;
@@ -229,7 +258,7 @@ public class RetroVis : Indicator
 
             // --- MAE ---
             string maeTxt = $"DOWN: {maePts:0.0}";
-            // Il MAE è l'escursione contro: se è molto "negativo" (es. -50 pts), lo scriviamo in rosso
+
             Brush maeBrush = maePts <= 0 ? Brushes.Red : Brushes.LimeGreen;
             gr.DrawString(maeTxt, dataFont, maeBrush, currentX, ty);
 
@@ -242,7 +271,7 @@ public class RetroVis : Indicator
     protected override void OnClear()
     {
         if (this.CurrentChart != null) this.CurrentChart.MouseClick -= OnChartClick;
-        titleFont?.Dispose(); dataFont?.Dispose(); httpClient?.Dispose();
+        titleFont?.Dispose(); dataFont?.Dispose();
     }
 
     protected void initTicker(bool useMicro = true)
@@ -275,8 +304,8 @@ public class RetroVis : Indicator
     }
 
     public static void Log(string m){
-        return;
-        Core.Instance.Loggers.Log($"[RetroVis] {m}");
+        
+        //Core.Instance.Loggers.Log($"[RetroVis] {m}", LoggingLevel.Trading);
     } 
 
     #region Models
