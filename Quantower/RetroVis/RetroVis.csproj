@@ -17,7 +17,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="System.Drawing.Common">
-      <HintPath>..\..\..\..\Quantower\TradingPlatform\v1.145.17\bin\System\System.Drawing.Common.dll</HintPath>
+      <HintPath>..\..\..\..\..\Quantower\TradingPlatform\v1.145.17\bin\System\System.Drawing.Common.dll</HintPath>
     </Reference>
     <Reference Include="TradingPlatform.BusinessLayer">
       <HintPath>C:\Quantower\TradingPlatform\v1.145.17\bin\TradingPlatform.BusinessLayer.dll</HintPath>

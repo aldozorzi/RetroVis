@@ -79,13 +79,22 @@ impl SearchEngine<f32> {
                         .collect();
 
                     let dist = Self::calculate_distance(current_pattern, &historical_pattern);
+                    
+                    let end_idx = if session.id == "LONDON_OPEN" {
+                        day.candles.iter()
+                            .position(|c| c.time == "09:25:00")
+                            .unwrap_or(day.candles.len() - 1)
+                    } else {
+                        day.candles.len() - 1
+                    };
+                    let actual_end = if end_idx > start_idx { end_idx } else { day.candles.len() - 1 };
 
                     // Calcolo MFE/MAE/Return sull'intera giornata rimanente
                     let mut max_high = baseline;
                     let mut min_low = baseline;
-                    let last_close = day.candles.last().unwrap().close;
+                    let last_close = day.candles[actual_end].close;
 
-                    for c in &day.candles[start_idx..] {
+                    for c in &day.candles[start_idx..=actual_end] {
                         if c.high > max_high { max_high = c.high; }
                         if c.low < min_low { min_low = c.low; }
                     }

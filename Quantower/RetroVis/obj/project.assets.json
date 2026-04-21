@@ -14,11 +14,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Lavori\\Trading\\QuantowerCode\\RetroVis\\RetroVis.csproj",
+      "projectUniqueName": "C:\\Lavori\\Trading\\RetroVis\\Quantower\\RetroVis\\RetroVis.csproj",
       "projectName": "RetroVis",
-      "projectPath": "C:\\Lavori\\Trading\\QuantowerCode\\RetroVis\\RetroVis.csproj",
+      "projectPath": "C:\\Lavori\\Trading\\RetroVis\\Quantower\\RetroVis\\RetroVis.csproj",
       "packagesPath": "C:\\Users\\aldoz\\.nuget\\packages\\",
-      "outputPath": "C:\\Lavori\\Trading\\QuantowerCode\\RetroVis\\obj\\",
+      "outputPath": "C:\\Lavori\\Trading\\RetroVis\\Quantower\\RetroVis\\obj\\",
       "projectStyle": "PackageReference",
       "fallbackFolders": [
         "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"

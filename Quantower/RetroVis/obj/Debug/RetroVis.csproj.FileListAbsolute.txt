@@ -11,3 +11,14 @@ C:\Lavori\Trading\QuantowerCode\RetroVis\obj\Debug\RetroVis.dll
 C:\Lavori\Trading\QuantowerCode\RetroVis\obj\Debug\refint\RetroVis.dll
 C:\Lavori\Trading\QuantowerCode\RetroVis\obj\Debug\RetroVis.pdb
 C:\Lavori\Trading\QuantowerCode\RetroVis\obj\Debug\ref\RetroVis.dll
+C:\Lavori\Trading\RetroVis\Quantower\RetroVis\obj\Debug\RetroVis.csproj.AssemblyReference.cache
+C:\Lavori\Trading\RetroVis\Quantower\RetroVis\obj\Debug\RetroVis.GeneratedMSBuildEditorConfig.editorconfig
+C:\Lavori\Trading\RetroVis\Quantower\RetroVis\obj\Debug\RetroVis.AssemblyInfoInputs.cache
+C:\Lavori\Trading\RetroVis\Quantower\RetroVis\obj\Debug\RetroVis.AssemblyInfo.cs
+C:\Lavori\Trading\RetroVis\Quantower\RetroVis\obj\Debug\RetroVis.csproj.CoreCompileInputs.cache
+C:\Lavori\Trading\RetroVis\Quantower\RetroVis\obj\Debug\RetroVis.sourcelink.json
+C:\Lavori\Trading\RetroVis\Quantower\RetroVis\obj\Debug\RetroVis.csproj.Up2Date
+C:\Lavori\Trading\RetroVis\Quantower\RetroVis\obj\Debug\RetroVis.dll
+C:\Lavori\Trading\RetroVis\Quantower\RetroVis\obj\Debug\refint\RetroVis.dll
+C:\Lavori\Trading\RetroVis\Quantower\RetroVis\obj\Debug\RetroVis.pdb
+C:\Lavori\Trading\RetroVis\Quantower\RetroVis\obj\Debug\ref\RetroVis.dll

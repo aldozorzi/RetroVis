@@ -206,7 +206,7 @@ public class RetroVis : Indicator
             float currentX = tx + 10;
 
             // --- EOD ---
-            string eodTxt = $"EOD: {eodPts:+0.0;-0.0}";
+            string eodTxt = $"EOS: {eodPts:+0.0;-0.0}";
             Brush eodBrush = eodPts >= 0 ? Brushes.LimeGreen : Brushes.Red;
             gr.DrawString(eodTxt, dataFont, eodBrush, currentX, ty);
             currentX += gr.MeasureString(eodTxt, dataFont).Width;
