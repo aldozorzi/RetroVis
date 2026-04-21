@@ -51,14 +51,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/day-details", get(day_details_handler))
         .route("/visualize", get(visualize_handler))
         .with_state(shared_state);
-
+    println!("Server in ascolto su http://127.0.0.1:9999");
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 9999));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
     Ok(())
 }
-
+async fn shutdown_signal() {
+    tokio::signal::ctrl_c()
+        .await
+        .expect("Impossibile installare il gestore CTRL+C");
+    println!("\nChiusura del server in corso...");
+}
 /// Handler per le richieste POST dall'indicatore C#
 async fn search_handler(
     State(state): State<Arc<AppState>>,
