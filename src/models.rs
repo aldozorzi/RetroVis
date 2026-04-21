@@ -1,7 +1,12 @@
 // src/models.rs
 use serde::{Deserialize, Serialize};
+use chrono::NaiveTime;
+use std::collections::HashMap;
+use crate::engine::SearchEngine;
 
-#[derive(Debug, Deserialize)]
+
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RawCandle<T> {
     pub date: String,
     pub time: String,
@@ -34,23 +39,50 @@ impl NormalizedCandle<f32> {
     }
 }
 
+// IL NUOVO DATABASE: Giornate intere grezze
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DayResult<T> {
+pub struct HistoricalDay<T> {
     pub date: String,
-    pub eod_ret_pct: T,
-    pub mfe_pct: T,
-    pub mae_pct: T,
-    pub open_0930: T, // Ora è coerente con il resto
+    pub candles: Vec<RawCandle<T>>, 
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HistoricalPattern<T> {
-    pub result: DayResult<T>,
-    pub candles: Vec<NormalizedCandle<T>>,
+// Struttura per passare la configurazione della sessione
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SessionConfig {
+    pub id: String,
+    pub start_time: NaiveTime,
+    pub timezone: String,
 }
 
-#[derive(Debug)]
-pub struct MatchOutcome<'a> {
-    pub pattern: &'a HistoricalPattern<f32>,
+
+#[derive(Debug, Deserialize)]
+pub struct QueryRequest<T> {
+    pub symbol: String,
+    pub session_id: String,
+    pub candles: Vec<RawCandle<T>>,
+}
+
+
+pub struct MatchOutcome {
+    pub date: String,
+    pub time: String,
     pub distance: f32,
+    pub eod_ret_pct: f32,
+    pub mfe_pct: f32,
+    pub mae_pct: f32,
+}
+
+#[derive(Debug,Serialize)]
+pub struct MatchResponse {
+    pub date: String,
+    pub time: String,
+    pub distance: f32,
+    pub eod_return: f32,
+    pub mfe: f32,
+    pub mae: f32,
+}
+
+pub struct AppState {
+    pub engines: HashMap<String, SearchEngine<f32>>,
+    pub sessions: HashMap<String, SessionConfig>,
 }
