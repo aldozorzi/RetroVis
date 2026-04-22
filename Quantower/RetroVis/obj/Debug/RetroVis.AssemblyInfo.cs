@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("RetroVis")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+9550e1d1b56a3d6b77318203bee1aeb5c92e9be8")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+5358f5f1d787cc1ef676e20bd6299c3144120922")]
 [assembly: System.Reflection.AssemblyProductAttribute("RetroVis")]
 [assembly: System.Reflection.AssemblyTitleAttribute("RetroVis")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

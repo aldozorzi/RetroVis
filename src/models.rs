@@ -1,4 +1,3 @@
-// src/models.rs
 use serde::{Deserialize, Serialize};
 use chrono::NaiveTime;
 use std::collections::HashMap;
@@ -39,14 +38,12 @@ impl NormalizedCandle<f32> {
     }
 }
 
-// IL NUOVO DATABASE: Giornate intere grezze
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoricalDay<T> {
     pub date: String,
     pub candles: Vec<RawCandle<T>>, 
 }
 
-// Struttura per passare la configurazione della sessione
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SessionConfig {
     pub id: String,
@@ -54,14 +51,12 @@ pub struct SessionConfig {
     pub timezone: String,
 }
 
-
 #[derive(Debug, Deserialize)]
 pub struct QueryRequest<T> {
     pub symbol: String,
     pub session_id: String,
     pub candles: Vec<RawCandle<T>>,
 }
-
 
 pub struct MatchOutcome {
     pub date: String,

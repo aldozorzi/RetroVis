@@ -18,7 +18,7 @@ public class RetroVis : Indicator
     public string SessionId = "AUTO";
 
     [InputParameter("Min Candles for Pattern", 1, 1, 10, 1)]
-    public int MinCandles = 3;
+    public int MinCandles = 2;
 
     [InputParameter("Max Candles for Pattern", 1, 1, 10, 1)]
     public int MaxCandles = 6;
@@ -117,7 +117,7 @@ public class RetroVis : Indicator
 
         
 
-        int targetHour = (effectiveSession == "NY_OPEN") ? 9 : 9;
+        int targetHour = (effectiveSession == "NY_OPEN") ? 9 : 8;
         int targetMinute = (effectiveSession == "NY_OPEN") ? 30 : 0;
         TimeZoneInfo sessionTz = (effectiveSession == "NY_OPEN") ? NyTz : LondonTz;
 
@@ -192,15 +192,19 @@ public class RetroVis : Indicator
     {
         Graphics gr = args.Graphics;
         gr.FillRectangle(isPanelVisible ? Brushes.IndianRed : Brushes.SteelBlue, toggleRect);
-        gr.DrawString(isPanelVisible ? "HIDE PANEL" : "SHOW PANEL", new Font("Arial", 7, FontStyle.Bold), Brushes.White, toggleRect.X + 15, toggleRect.Y + 7);
+        string label = isPanelVisible ? "HIDE PANEL" : "SHOW PANEL";
+        Font btnfont = new Font("Arial", 7, FontStyle.Bold);
+        float titleWidth = gr.MeasureString(label, btnfont).Width;
+        gr.DrawString(label, btnfont, Brushes.White, toggleRect.X + (float)Math.Round((toggleRect.Width - titleWidth) / 2), toggleRect.Y + 7);
 
         if (isPanelVisible) DrawResultsPanel(gr);
     }
 
     private void DrawResultsPanel(Graphics gr)
     {
-        Rectangle panelRect = new Rectangle(toggleRect.X, toggleRect.Y + 35, 380, 260);
-        gr.FillRectangle(new SolidBrush(Color.FromArgb(200, 10, 10, 10)), panelRect);
+        // Altezza ottimizzata senza winrate
+        Rectangle panelRect = new Rectangle(toggleRect.X, toggleRect.Y + 35, 330, 300);
+        gr.FillRectangle(new SolidBrush(Color.FromArgb(220, 10, 10, 10)), panelRect);
 
         int tx = panelRect.X + 12, ty = panelRect.Y + 12;
         if (results == null || results.Count == 0)
@@ -208,74 +212,84 @@ public class RetroVis : Indicator
             gr.DrawString("WAITING FOR DATA...", titleFont, Brushes.Gray, tx, ty);
             return;
         }
+
+        // --- TESTATA AGNOSTICA ---
         string deltaSign = currentDelta >= 0 ? "+" : "";
         string deltaText = $" | NOW: {deltaSign}{currentDelta:F1}";
+        // Il colore del delta attuale serve solo a sapere dove siamo rispetto all'open
         Brush deltaBrush = currentDelta >= 0 ? Brushes.LimeGreen : Brushes.Red;
 
-
-        string dynamicTitle = $"{effectiveSession} - TOP MATCHES ({this.currentCandleCount} CANDLES)";
+        string dynamicTitle = $"{effectiveSession} ({this.currentCandleCount} CANDLES)";
         gr.DrawString(dynamicTitle, titleFont, Brushes.White, tx, ty);
         float titleWidth = gr.MeasureString(dynamicTitle, titleFont).Width;
         gr.DrawString(deltaText, titleFont, deltaBrush, tx + titleWidth, ty);
-        ty += 30;
+        ty += 22;
 
-        matchClickAreas.Clear();
-        matchDates.Clear();
+        // --- SEZIONE SUMMARY (VOLATILITY EDGE) ---
+        double sumMfe = 0, sumMae = 0, sumEos = 0;
 
         foreach (var m in results)
         {
-            // Reintegro la normalizzazione della distanza in percentuale
-            float similarity = 1.0f / (1.0f + m.Distance) * 100f;
+            sumMfe += Math.Abs((m.Mfe / 100.0) * currentPriceBase);
+            sumMae += Math.Abs((m.Mae / 100.0) * currentPriceBase);
+            sumEos += (m.EodReturn / 100.0) * currentPriceBase;
+        }
 
-            // Calcolo valori assoluti in punti
+        double avgMfe = sumMfe / results.Count;
+        double avgMae = sumMae / results.Count;
+        double avgEos = sumEos / results.Count;
+
+        // L'Edge Ratio qui è: quanto spazio ho mediamente a favore vs quanto contro
+        double edgeRatio = avgMfe / (avgMae == 0 ? 1 : avgMae);
+
+        // Box summary
+        Rectangle summaryRect = new Rectangle(tx, ty, panelRect.Width - 24, 45);
+        gr.DrawRectangle(Pens.DimGray, summaryRect);
+
+        string summaryLine1 = $"AVG UP: +{avgMfe:F1} pts | AVG DOWN: -{avgMae:F1} pts";
+        string summaryLine2 = $"EDGE RATIO: {edgeRatio:F2} | AVG EOS: {avgEos:+0.0;-0.0}";
+
+        // Il colore è solo sull'Edge Ratio: > 2.0 è un segnale di asimmetria forte
+        double longEdge = avgMfe / (avgMae == 0 ? 1 : avgMae);
+        double shortEdge = avgMae / (avgMfe == 0 ? 1 : avgMfe);
+        Brush edgeBrush = Brushes.White;
+        if (longEdge > 2.0)
+        {
+            edgeBrush = Brushes.LimeGreen; // Edge Long netto
+        }
+        else if (shortEdge > 2.0)
+        {
+            edgeBrush = Brushes.Red; // Edge Short netto (il rumore UP è piccolo rispetto all'espansione DOWN)
+        }
+        else if (longEdge > 1.2 || shortEdge > 1.2)
+        {
+            edgeBrush = Brushes.Gold; // "Macedonia": UP e DOWN si equivalgono (Range)
+        }
+
+        gr.DrawString(summaryLine1, dataFont, Brushes.LightGray, tx + 5, ty + 5);
+        gr.DrawString(summaryLine2, dataFont, edgeBrush, tx + 5, ty + 22);
+
+        ty += 55;
+
+        // --- LISTA MATCH ---
+        foreach (var m in results)
+        {
+            float similarity = 1.0f / (1.0f + m.Distance) * 100f;
             double eodPts = (m.EodReturn / 100.0) * currentPriceBase;
             double mfePts = (m.Mfe / 100.0) * currentPriceBase;
             double maePts = (m.Mae / 100.0) * currentPriceBase;
 
-            // link rects for click
-            float rowWidth = 250f;
-            float rowHeight = 18f + 25f;
-            RectangleF clickRect = new RectangleF(tx, ty, rowWidth, rowHeight);
-
-            matchClickAreas.Add(clickRect);
+            matchClickAreas.Add(new RectangleF(tx, ty, panelRect.Width - 30, 35));
             matchDates.Add(m.Date);
 
-            // 1. Riga intestazione: Data, Ora e Similarità (Match %)
-            string header = $"{m.Date} {m.Time} | Match: {similarity:F1}%";
-            gr.DrawString(header, dataFont, Brushes.White, tx, ty);
-            ty += 18;
+            // Intestazione match (grigia per non distrarre)
+            gr.DrawString($"{m.Date} {m.Time} (MATCH:{similarity:F1}%)", dataFont, Brushes.Gray, tx, ty);
+            ty += 15;
 
-            // 2. Riga Statistiche Splittata (Colori Dinamici)
-            float currentX = tx + 10;
-
-            // --- EOD ---
-            string eodTxt = $"EOS: {eodPts:+0.0;-0.0}";
-            Brush eodBrush = eodPts >= 0 ? Brushes.LimeGreen : Brushes.Red;
-            gr.DrawString(eodTxt, dataFont, eodBrush, currentX, ty);
-            currentX += gr.MeasureString(eodTxt, dataFont).Width;
-
-            // SEPARATOR 
-            string separatorTxt = $" | ";
-            gr.DrawString(separatorTxt, dataFont, Brushes.White, currentX, ty);
-            currentX += gr.MeasureString(separatorTxt, dataFont).Width;
-
-            // --- MFE ---
-            string mfeTxt = $"UP: {mfePts:+0.0}";
-
-            Brush mfeBrush = mfePts >= 0 ? Brushes.LimeGreen : Brushes.Red;
-            gr.DrawString(mfeTxt, dataFont, mfeBrush, currentX, ty);
-            currentX += gr.MeasureString(mfeTxt, dataFont).Width;
-
-            // SEPARATOR 
-            gr.DrawString(separatorTxt, dataFont, Brushes.White, currentX, ty);
-            currentX += gr.MeasureString(separatorTxt, dataFont).Width;
-
-            // --- MAE ---
-            string maeTxt = $"DOWN: {maePts:0.0}";
-
-            Brush maeBrush = maePts <= 0 ? Brushes.Red : Brushes.LimeGreen;
-            gr.DrawString(maeTxt, dataFont, maeBrush, currentX, ty);
-
+            // Dati puri: UP e DOWN dominano la lettura
+            // EOS bianco (agnostico), UP e DOWN evidenziati solo per direzione
+            string vals = $"UP: {mfePts:+0.0}  DOWN: {maePts:0.0}  (EOS: {eodPts:+0.0;-0.0})";
+            gr.DrawString(vals, dataFont, Brushes.White, tx + 10, ty);
 
             ty += 25;
         }
@@ -298,10 +312,8 @@ public class RetroVis : Indicator
                 if (matchClickAreas[i].Contains(e.Location))
                 {
                     string date = matchDates[i];
-                    // Inverti il simbolo se necessario, o usa Symbol.Name
-                    string symbol = this.Symbol.Name.Contains("MNQ") ? "NQ" : "NQ";
 
-                    string url = $"http://127.0.0.1:9999/visualize?symbol={symbol}&date={date}";
+                    string url = $"http://127.0.0.1:9999/visualize?symbol={ticker}&date={date}";
 
                     try
                     {

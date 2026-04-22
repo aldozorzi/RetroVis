@@ -20,19 +20,16 @@ use engine::SearchEngine;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut engines = HashMap::new();
 
-    // Carichiamo i vari asset (NQ, GC, ecc.)
-    // In futuro questi percorsi possono essere letti da un file di config
-    let nq_data = parser::load_and_process("data/nasdaq_m5.csv")?;
+    let nq_data = parser::load_and_process("data/nq-M5.csv","NQ")?;
     engines.insert("NQ".to_string(), SearchEngine::new(nq_data));
 
-    /*let gc_data = parser::load_and_process("data/gold_m5.csv")?;
-    engines.insert("GC".to_string(), SearchEngine::new(gc_data));*/
+    let gc_data = parser::load_and_process("data/gc-M5.csv","GC")?;
+    engines.insert("GC".to_string(), SearchEngine::new(gc_data));
 
-    // Configurazione sessioni (rimane invariata)
     let mut sessions = HashMap::new();
     sessions.insert("LONDON_OPEN".to_string(), models::SessionConfig {
         id: "LONDON_OPEN".to_string(),
-        start_time: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+        start_time: NaiveTime::from_hms_opt(8, 0, 0).unwrap(),
         timezone: "Europe/London".to_string(),
     });
     sessions.insert("NY_OPEN".to_string(), models::SessionConfig {
@@ -66,7 +63,6 @@ async fn shutdown_signal() {
         .expect("Impossibile installare il gestore CTRL+C");
     println!("\nChiusura del server in corso...");
 }
-/// Handler per le richieste POST dall'indicatore C#
 async fn search_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<QueryRequest<f32>>,

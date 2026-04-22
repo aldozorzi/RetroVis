@@ -10,36 +10,31 @@ impl SearchEngine<f32> {
         Self { dataset }
     }
 
-    /// Calcola l'ora di New York corrispondente all'inizio della sessione per una data specifica
-    fn get_ny_time_for_session(date_str: &str, session: &crate::models::SessionConfig) -> NaiveTime {
-        use chrono::{TimeZone};
+    fn get_ny_time_for_session(date_str: &str, session: &crate::models::SessionConfig) -> Option<NaiveTime> {
+        use chrono::TimeZone;
         use chrono_tz::Tz;
 
-        // 1. Parsing della data con gestione robusta dell'errore
-        let target_date = NaiveDate::parse_from_str(date_str, "%d/%m/%Y")
-            .or_else(|_| NaiveDate::parse_from_str(date_str, "%Y-%m-%d")) // Fallback se il formato cambia
-            .unwrap_or_else(|_| NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
-        
-        let session_tz: Tz = session.timezone.parse().expect("Timezone sessione non valida");
+        // Parsing esplicito con risultato Option invece di unwrap_or fallback silenzioso
+        let target_date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+            .or_else(|_| NaiveDate::parse_from_str(date_str, "%d/%m/%Y"))
+            .ok()?; // Ritorna None se il parsing fallisce, invece di usare una data sbagliata
+
+        let session_tz: Tz = session.timezone.parse().ok()?;
         let ny_tz: Tz = "America/New_York".parse().unwrap();
 
-        // 2. Creiamo il datetime locale (es. 09:00 a Londra)
         let local_naive_dt = target_date.and_time(session.start_time);
 
-        // 3. Convertiamo in datetime con fuso orario
-        // Usiamo earliest() per gestire i casi di cambio ora (DST) in modo che non mandi in crash il server
         let local_dt = match session_tz.from_local_datetime(&local_naive_dt) {
             chrono::LocalResult::Single(dt) => dt,
             chrono::LocalResult::Ambiguous(dt_earliest, _) => dt_earliest,
             chrono::LocalResult::None => {
-                // Se l'ora non esiste (es. salto in avanti), aggiungiamo un'ora per trovare un tempo valido
-                session_tz.from_local_datetime(&(local_naive_dt + chrono::Duration::hours(1)))
-                    .unwrap()
+                session_tz
+                    .from_local_datetime(&(local_naive_dt + chrono::Duration::hours(1)))
+                    .single()?
             }
         };
 
-        // 4. Conversione pura nel fuso di NY ed estrazione del NaiveTime
-        local_dt.with_timezone(&ny_tz).time()
+        Some(local_dt.with_timezone(&ny_tz).time())
     }
 
     fn calculate_distance(current: &[NormalizedCandle<f32>], historical: &[NormalizedCandle<f32>]) -> f32 {
@@ -63,9 +58,13 @@ impl SearchEngine<f32> {
         let mut outcomes = Vec::new();
 
         for day in &self.dataset {
-            // 1. Determina che ora era a NY per questo giorno storico (es. le 03:00 o le 04:00)
-            let start_t_ny = Self::get_ny_time_for_session(&day.date, session);
-            // 2. Trova l'indice della candela che corrisponde all'apertura della sessione
+            
+            let Some(start_t_ny) = Self::get_ny_time_for_session(&day.date, session) else {
+                continue;
+            };
+
+            let formatted_time = start_t_ny.format("%H:%M:%S").to_string();
+
             if let Some(start_idx) = day.candles.iter().position(|c| {
                 // Nota: usiamo il formato corretto per il match dell'orario
                 c.time == start_t_ny.format("%H:%M:%S").to_string()
@@ -111,13 +110,11 @@ impl SearchEngine<f32> {
             }
         }
 
-        // Ordinamento per distanza (mancante nel tuo snippet originale ma necessario)
         outcomes.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
         outcomes.into_iter().take(top_k).collect()
     }
 
     pub fn get_day_candles(&self, date: &str) -> Vec<crate::models::ChartDataResponse> {
-    // Cerchiamo la giornata che corrisponde esattamente alla stringa passata (es: "2024-04-21")
     self.dataset.iter()
         .find(|d| d.date == date)
         .map(|d| {
