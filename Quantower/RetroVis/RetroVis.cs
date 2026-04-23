@@ -111,7 +111,77 @@ public class RetroVis : Indicator
 
         // Parametri orario in base alla sessione
 
-        effectiveSession = (SessionId == "AUTO")
+        DateTime nowUtc = DateTime.UtcNow;
+        DateTime londonNow = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, LondonTz);
+        DateTime nyNow = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, NyTz);
+
+        if (SessionId == "AUTO")
+        {
+            // --- LONDRA (08:00 - 17:00 orario di Londra) ---
+            int londonTime = londonNow.Hour * 100 + londonNow.Minute;
+
+            // --- NEW YORK (09:30 - 16:00 orario di NY) ---
+            int nyTime = nyNow.Hour * 100 + nyNow.Minute;
+
+            if (londonTime >= 800 && londonTime < 1700 && nyTime < 930)
+            {
+                // Siamo in sessione Londra e NY non è ancora aperta
+                effectiveSession = "LONDON_OPEN";
+            }
+            else if (nyTime >= 930 && nyTime < 1600)
+            {
+                // Sessione New York
+                effectiveSession = "NY_OPEN";
+            }
+            else
+            {
+                effectiveSession = null; // Fuori sessione o sessione non gestita
+            }
+        }
+        else
+        {
+            effectiveSession = SessionId;
+        }
+
+        // 2. Assegnazione parametri basata sulla sessione identificata
+        int targetHour;
+        int targetMinute;
+        TimeZoneInfo sessionTz;
+        if (effectiveSession != null)
+        {
+            
+            
+
+            if (effectiveSession == "NY_OPEN")
+            {
+                targetHour = 9;
+                targetMinute = 30;
+                sessionTz = NyTz;
+            }
+            else if (effectiveSession == "LONDON_OPEN")
+            {
+                targetHour = 8;
+                targetMinute = 0;
+                sessionTz = LondonTz;
+            }
+            else
+            {
+                // Default o altre sessioni
+                targetHour = 0;
+                targetMinute = 0;
+                sessionTz = NyTz;
+            }
+
+            // Procedi con il calcolo dei match...
+        }
+        else
+        {
+            return;
+        }
+
+
+
+        /*effectiveSession = (SessionId == "AUTO")
             ? ((TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NyTz).Hour < 9 || (TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NyTz).Hour == 9 && TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NyTz).Minute < 30)) ? "LONDON_OPEN" : "NY_OPEN")
             : SessionId;
 
@@ -119,12 +189,11 @@ public class RetroVis : Indicator
 
         int targetHour = (effectiveSession == "NY_OPEN") ? 9 : 8;
         int targetMinute = (effectiveSession == "NY_OPEN") ? 30 : 0;
-        TimeZoneInfo sessionTz = (effectiveSession == "NY_OPEN") ? NyTz : LondonTz;
+        TimeZoneInfo sessionTz = (effectiveSession == "NY_OPEN") ? NyTz : LondonTz;*/
 
         int openBarIndex = -1;
-        for (int i = 0; i < Math.Min(Count, 300); i++)
+        for (int i = 0; i < Math.Min(Count, 72); i++)
         {
-            // Convertiamo l'orario della candela nel fuso orario della sessione
             DateTime barInSessionTime = TimeZoneInfo.ConvertTimeFromUtc(Time(i).ToUniversalTime(), sessionTz);
 
             if (barInSessionTime.Hour == targetHour && barInSessionTime.Minute == targetMinute)
@@ -134,8 +203,11 @@ public class RetroVis : Indicator
             }
         }
 
-        if (openBarIndex == -1 || openBarIndex < MinCandles) return;
-
+        if (openBarIndex == -1 || openBarIndex < MinCandles)
+        {
+            results.Clear();
+            return;
+        }
         var candlesToInquire = new List<RawCandle>();
         // Prendiamo le candele dall'apertura fino alla corrente (max MaxCandles)
         int limit = Math.Min(openBarIndex, MaxCandles);
@@ -207,11 +279,7 @@ public class RetroVis : Indicator
         gr.FillRectangle(new SolidBrush(Color.FromArgb(220, 10, 10, 10)), panelRect);
 
         int tx = panelRect.X + 12, ty = panelRect.Y + 12;
-        if (results == null || results.Count == 0)
-        {
-            gr.DrawString("WAITING FOR DATA...", titleFont, Brushes.Gray, tx, ty);
-            return;
-        }
+        
 
         // --- TESTATA AGNOSTICA ---
         string deltaSign = currentDelta >= 0 ? "+" : "";
@@ -219,11 +287,28 @@ public class RetroVis : Indicator
         // Il colore del delta attuale serve solo a sapere dove siamo rispetto all'open
         Brush deltaBrush = currentDelta >= 0 ? Brushes.LimeGreen : Brushes.Red;
 
-        string dynamicTitle = $"{effectiveSession} ({this.currentCandleCount} CANDLES)";
+        string dynamicTitle = "";
+        if(effectiveSession != null)
+        {
+            dynamicTitle = $"{effectiveSession} ({this.currentCandleCount} CANDLES)";
+        }
+        else
+        {
+            dynamicTitle = "NO ACTIVE SESSION";
+        }
         gr.DrawString(dynamicTitle, titleFont, Brushes.White, tx, ty);
         float titleWidth = gr.MeasureString(dynamicTitle, titleFont).Width;
-        gr.DrawString(deltaText, titleFont, deltaBrush, tx + titleWidth, ty);
+        if (results.Count > 0)
+        {
+            gr.DrawString(deltaText, titleFont, deltaBrush, tx + titleWidth, ty);
+        }
         ty += 22;
+
+        if (results == null || results.Count == 0)
+        {
+            gr.DrawString("WAITING FOR DATA...", titleFont, Brushes.Gray, tx, ty);
+            return;
+        }
 
         // --- SEZIONE SUMMARY (VOLATILITY EDGE) ---
         double sumMfe = 0, sumMae = 0, sumEos = 0;
@@ -247,7 +332,7 @@ public class RetroVis : Indicator
         gr.DrawRectangle(Pens.DimGray, summaryRect);
 
         string summaryLine1 = $"AVG UP: +{avgMfe:F1} pts | AVG DOWN: -{avgMae:F1} pts";
-        string summaryLine2 = $"EDGE RATIO: {edgeRatio:F2} | AVG EOS: {avgEos:+0.0;-0.0}";
+        
 
         // Il colore è solo sull'Edge Ratio: > 2.0 è un segnale di asimmetria forte
         double longEdge = avgMfe / (avgMae == 0 ? 1 : avgMae);
@@ -265,6 +350,7 @@ public class RetroVis : Indicator
         {
             edgeBrush = Brushes.Gold; // "Macedonia": UP e DOWN si equivalgono (Range)
         }
+        string summaryLine2 = $"EDGE RATIO: {Math.Max(longEdge,shortEdge):F2} | AVG EOS: {avgEos:+0.0;-0.0}";
 
         gr.DrawString(summaryLine1, dataFont, Brushes.LightGray, tx + 5, ty + 5);
         gr.DrawString(summaryLine2, dataFont, edgeBrush, tx + 5, ty + 22);

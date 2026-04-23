@@ -18,6 +18,7 @@ use engine::SearchEngine;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    clear_terminal();
     let mut engines = HashMap::new();
 
     let nq_data = parser::load_and_process("data/nq-M5.csv","NQ")?;
@@ -277,4 +278,8 @@ async fn visualize_handler() -> Html<String> {
 </body>
 </html>
 "#.to_string())
+}
+
+fn clear_terminal() {
+    print!("{esc}[2J{esc}[1;1H", esc = 27 as char);
 }

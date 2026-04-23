@@ -63,8 +63,6 @@ impl SearchEngine<f32> {
                 continue;
             };
 
-            let formatted_time = start_t_ny.format("%H:%M:%S").to_string();
-
             if let Some(start_idx) = day.candles.iter().position(|c| {
                 // Nota: usiamo il formato corretto per il match dell'orario
                 c.time == start_t_ny.format("%H:%M:%S").to_string()
@@ -115,18 +113,20 @@ impl SearchEngine<f32> {
     }
 
     pub fn get_day_candles(&self, date: &str) -> Vec<crate::models::ChartDataResponse> {
-    self.dataset.iter()
-        .find(|d| d.date == date)
-        .map(|d| {
-            d.candles.iter().map(|c| crate::models::ChartDataResponse {
-                // Uniamo data e ora per il frontend: "2024-04-21 09:30:00"
-                time: format!("{} {}", c.date, c.time), 
-                open: c.open,
-                high: c.high,
-                low: c.low,
-                close: c.close,
-            }).collect()
-        })
-        .unwrap_or_else(Vec::new)
-}
+        self.dataset.iter()
+            .find(|d| d.date == date)
+            .map(|d| {
+                d.candles.iter().map(|c| crate::models::ChartDataResponse {
+                    // Uniamo data e ora per il frontend: "2024-04-21 09:30:00"
+                    time: format!("{} {}", c.date, c.time), 
+                    open: c.open,
+                    high: c.high,
+                    low: c.low,
+                    close: c.close,
+                }).collect()
+            })
+            .unwrap_or_else(Vec::new)
+    }
+
+    
 }
