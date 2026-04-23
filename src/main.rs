@@ -3,7 +3,7 @@ use axum::{
     routing::{post, get},
     Json,
     Router,
-    response::Html
+    response::{Html,IntoResponse}
 };
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -13,7 +13,7 @@ mod models;
 mod parser;
 mod engine;
 
-use models::{QueryRequest,AppState,MatchResponse};
+use models::{QueryRequest,AppState,MatchResponse,ContextQueryRequest,Context};
 use engine::SearchEngine;
 
 #[tokio::main]
@@ -48,6 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/search", post(search_handler))
         .route("/day-details", get(day_details_handler))
         .route("/visualize", get(visualize_handler))
+        .route("/context_matches", post(context_matches_handler))
         .with_state(shared_state);
     println!("Server in ascolto su http://127.0.0.1:9999");
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 9999));
@@ -68,7 +69,7 @@ async fn search_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<QueryRequest<f32>>,
 ) -> Json<Vec<MatchResponse>> {
-    
+    /*
     // --- LOG DI DEBUG ---
     println!("--- NUOVA RICHIESTA RICEVUTA ---");
     println!("Simbolo: {}", payload.symbol);
@@ -80,6 +81,8 @@ async fn search_handler(
         println!("Prima candela inviata: {} {}", first.date, first.time);
     }
     // --------------------
+    */
+
 
     // 1. SELEZIONE DEL MOTORE IN BASE AL SYMBOL (Risolve il warning)
     let engine = match state.engines.get(&payload.symbol) {
@@ -127,11 +130,53 @@ async fn day_details_handler(
     let date = params.get("date").cloned().unwrap_or_default();
 
     if let Some(engine) = state.engines.get(&symbol) {
-        return Json(engine.get_day_candles(&date));
+        return Json(engine.get_day_candles(&date,true));
     }
 
     Json(vec![])
 }
+
+async fn context_matches_handler(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ContextQueryRequest>,
+) -> impl IntoResponse {
+    /*
+    println!(">>> /context_matches ricevuto: symbol={}, session={}", req.symbol, req.session_id);
+    println!("    session_open={}, prev_close={}, prev_high={}, prev_low={}", req.session_open, req.prev_close, req.prev_high, req.prev_low);
+    println!("    intraday_high={}, intraday_low={}", req.intraday_high, req.intraday_low);
+    */
+    let engine = match state.engines.get(&req.symbol) {
+        Some(e) => e,
+        None => return Json(serde_json::json!({"error": "symbol not found"})),
+    };
+    let session = match state.sessions.get(&req.session_id) {
+        Some(s) => s,
+        None => return Json(serde_json::json!({"error": "session not found"})),
+    };
+
+    let current_context = Context::new(
+        req.session_open,
+        req.prev_close,
+        req.prev_high,
+        req.prev_low,
+        req.intraday_high,
+        req.intraday_low,
+    );
+
+    let matches = engine.find_context_matches(&current_context, req.top_k.min(10), session);
+
+    let response: Vec<MatchResponse> = matches.iter().map(|m| MatchResponse {
+        date: m.date.clone(),
+        time: m.time.clone(),
+        distance: m.distance,
+        eod_return: m.eod_ret_pct,
+        mfe: m.mfe_pct,
+        mae: m.mae_pct,
+    }).collect();
+
+    Json(serde_json::json!(response))
+}
+
 async fn visualize_handler() -> Html<String> {
     Html(r#"
 <!DOCTYPE html>
@@ -201,42 +246,68 @@ async fn visualize_handler() -> Html<String> {
                 
                 candleSeries.setData(formattedData);
 
-                const nyOpenCandle = formattedData.find(d => {
-                    const date = new Date(d.time * 1000);
-                    return date.getUTCHours() === 9 && date.getUTCMinutes() === 30;
-                });
-                const londonOpenTime = getLondonOpenInNY(dateParam);
-                const londonOpenCandle = formattedData.find(d => {
-                    const date = new Date(d.time * 1000);
-                    const timeStr = date.getUTCHours().toString().padStart(2, '0') + ":" + 
-                                    date.getUTCMinutes().toString().padStart(2, '0') + ":00";
-                    return timeStr === londonOpenTime;
+                const dateGroups = {};
+                formattedData.forEach(d => {
+                    const dateKey = new Date(d.time * 1000).toISOString().slice(0, 10);
+                    if (!dateGroups[dateKey]) dateGroups[dateKey] = [];
+                    dateGroups[dateKey].push(d);
                 });
 
                 markers = [];
-                if (londonOpenCandle) {
-                    markers.push({
-                        time: londonOpenCandle.time,
-                        position: 'aboveBar',
-                        color: '#f6d32d',
-                        shape: 'arrowDown',
-                        text: 'LONDON OPEN',
-                        size: 2
-                    });
-                }
+                Object.keys(dateGroups).forEach(dateKey => {
+                    const dayCandles = dateGroups[dateKey];
 
-                if (nyOpenCandle) {
-                    markers.push({
-                        time: nyOpenCandle.time,
-                        position: 'aboveBar',
-                        color: '#4caf50',
-                        shape: 'arrowDown',
-                        text: 'NY OPEN',
-                        size: 2
+                    const nyOpenCandle = dayCandles.find(d => {
+                        const date = new Date(d.time * 1000);
+                        return date.getUTCHours() === 9 && date.getUTCMinutes() === 30;
                     });
-                } 
-                LightweightCharts.createSeriesMarkers(candleSeries,markers);
-                chart.timeScale().fitContent();
+
+                    const londonOpenTime = getLondonOpenInNY(dateKey);
+                    const londonOpenCandle = dayCandles.find(d => {
+                        const date = new Date(d.time * 1000);
+                        const timeStr = date.getUTCHours().toString().padStart(2, '0') + ":" +
+                                        date.getUTCMinutes().toString().padStart(2, '0') + ":00";
+                        return timeStr === londonOpenTime;
+                    });
+
+                    if (londonOpenCandle) {
+                        markers.push({
+                            time: londonOpenCandle.time,
+                            position: 'aboveBar',
+                            color: '#f6d32d',
+                            shape: 'arrowDown',
+                            text: 'LONDON OPEN',
+                            size: 2
+                        });
+                    }
+
+                    if (nyOpenCandle) {
+                        markers.push({
+                            time: nyOpenCandle.time,
+                            position: 'aboveBar',
+                            color: '#4caf50',
+                            shape: 'arrowDown',
+                            text: 'NY OPEN',
+                            size: 2
+                        });
+                    }
+                });
+
+                markers.sort((a, b) => a.time - b.time);
+                LightweightCharts.createSeriesMarkers(candleSeries, markers);
+                const secondDayStart = formattedData.find(d => {
+                    const dateKey = new Date(d.time * 1000).toISOString().slice(0, 10);
+                    return dateKey === dateParam;
+                });
+
+                if (secondDayStart) {
+                    chart.timeScale().setVisibleRange({
+                        from: secondDayStart.time - 1800, // 30 min prima dell'apertura del secondo giorno
+                        to: formattedData[formattedData.length - 1].time
+                    });
+                } else {
+                    chart.timeScale().fitContent();
+                }
             })
             .catch(err => {
                 document.getElementById('info').innerText = "Errore di connessione al server Rust";

@@ -24,7 +24,8 @@ public class RetroVis : Indicator
     public int MaxCandles = 6;
 
     [InputParameter("Webserver URL", 2)]
-    public string ServerUrl = "http://127.0.0.1:9999/search";
+    public string ServerUrl = "http://127.0.0.1:9999";
+    
     #endregion
 
     #region Internal Fields
@@ -48,6 +49,16 @@ public class RetroVis : Indicator
     private List<RectangleF> matchClickAreas = new List<RectangleF>();
     private List<string> matchDates = new List<string>();
 
+    public string SearchUrl { get; set; }
+    public string ContextUrl { get; set; }
+    private List<MatchResponse> contextResults = new List<MatchResponse>();
+    private string lastContextSessionDate = ""; // traccia se il contesto è già stato caricato per questa apertura
+
+    private List<RectangleF> contextClickAreas = new List<RectangleF>();
+    private List<string> contextDates = new List<string>();
+
+    private int lastPanelHeight = 0;
+
     #endregion
 
     public RetroVis() : base()
@@ -58,6 +69,8 @@ public class RetroVis : Indicator
 
     protected override void OnInit()
     {
+        this.SearchUrl = $"{ServerUrl.TrimEnd('/')}/search";
+        this.ContextUrl = $"{ServerUrl.TrimEnd('/')}/context_matches";
         try
         {
             NyTz = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
@@ -87,7 +100,7 @@ public class RetroVis : Indicator
         this.lastProcessedBarTime = default(DateTime);
 
         // 2. Azzeriamo il tuo contatore interno
-        this.currentCandleCount = -1;
+        this.currentCandleCount = 0;
 
         // Opzionale: Se vuoi un feedback visivo immediato
         // Log.Info("Parametri aggiornati: ricaricamento pattern...");
@@ -99,6 +112,12 @@ public class RetroVis : Indicator
 
         DateTime currentBarTime = Time();
         if (currentBarTime == lastProcessedBarTime) return;
+        else
+        {
+            results.Clear();
+            matchClickAreas.Clear();
+            contextClickAreas.Clear();
+        }
         // Filtro real-time
         HistoryAggregationTime aggregation = (HistoryAggregationTime)this.HistoricalData.Aggregation;
 
@@ -149,9 +168,6 @@ public class RetroVis : Indicator
         TimeZoneInfo sessionTz;
         if (effectiveSession != null)
         {
-            
-            
-
             if (effectiveSession == "NY_OPEN")
             {
                 targetHour = 9;
@@ -192,7 +208,7 @@ public class RetroVis : Indicator
         TimeZoneInfo sessionTz = (effectiveSession == "NY_OPEN") ? NyTz : LondonTz;*/
 
         int openBarIndex = -1;
-        for (int i = 0; i < Math.Min(Count, 72); i++)
+        for (int i = 0; i < Math.Min(Count, 90); i++)
         {
             DateTime barInSessionTime = TimeZoneInfo.ConvertTimeFromUtc(Time(i).ToUniversalTime(), sessionTz);
 
@@ -202,12 +218,21 @@ public class RetroVis : Indicator
                 break;
             }
         }
-
         if (openBarIndex == -1 || openBarIndex < MinCandles)
         {
             results.Clear();
+            matchClickAreas.Clear();
+            contextClickAreas.Clear();
             return;
         }
+        string sessionDateKey = $"{effectiveSession}_{Time(openBarIndex):yyyy-MM-dd}";
+        if (sessionDateKey != lastContextSessionDate)
+        {
+            lastContextSessionDate = sessionDateKey;
+            _ = FetchContextMatchesAsync(openBarIndex);
+        }
+
+
         var candlesToInquire = new List<RawCandle>();
         // Prendiamo le candele dall'apertura fino alla corrente (max MaxCandles)
         int limit = Math.Min(openBarIndex, MaxCandles);
@@ -228,8 +253,8 @@ public class RetroVis : Indicator
         }
         
         currentPriceBase = Open(openBarIndex);
-        Log("openBarIndex" + openBarIndex + "currentPriceBase: " + currentPriceBase);
         this.currentCandleCount = candlesToInquire.Count;
+        
         _ = FetchMatchesAsync(candlesToInquire);
     }
 
@@ -247,7 +272,7 @@ public class RetroVis : Indicator
             string json = JsonSerializer.Serialize(request);
             Log("json:" + json);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
-            var response = await httpClient.PostAsync(ServerUrl, content);
+            var response = await httpClient.PostAsync(SearchUrl, content);
 
             if (response.IsSuccessStatusCode)
             {
@@ -258,6 +283,104 @@ public class RetroVis : Indicator
             }
         }
         catch (Exception ex) { Log("Error:"+ ex.Message); }
+    }
+
+    private async Task FetchContextMatchesAsync(int openBarIndex)
+    {
+        
+        try
+        {
+            // --- CONFIGURAZIONE SESSIONE ---
+            int closeHour, closeMinute;
+            TimeZoneInfo sessionTz;
+
+            if (effectiveSession == "NY_OPEN")
+            {
+                closeHour = 17;
+                closeMinute = 0;
+                sessionTz = NyTz;
+            }
+            else if (effectiveSession == "LONDON_OPEN")
+            {
+                closeHour = 17;
+                closeMinute = 0;
+                sessionTz = LondonTz;
+            }
+            else
+            {
+                closeHour = 17;
+                closeMinute = 0;
+                sessionTz = NyTz;
+            }
+
+            // --- DATI SESSIONE CORRENTE ---
+            float sessionOpen = (float)Open(openBarIndex);
+
+            // Max/min delle candele del giorno corrente PRIMA dell'apertura di sessione
+            float intradayHigh = sessionOpen;
+            float intradayLow = sessionOpen;
+            DateTime openBarDate = TimeZoneInfo.ConvertTimeFromUtc(Time(openBarIndex).ToUniversalTime(), NyTz).Date;
+
+            for (int i = openBarIndex + 1; i < Math.Min(Count, openBarIndex + 72); i++)
+            {
+                DateTime barNy = TimeZoneInfo.ConvertTimeFromUtc(Time(i).ToUniversalTime(), NyTz);
+                if (barNy.Date != openBarDate) break;
+                if ((float)High(i) > intradayHigh) intradayHigh = (float)High(i);
+                if ((float)Low(i) < intradayLow) intradayLow = (float)Low(i);
+            }
+
+            // --- DATI GIORNO PRECEDENTE (per sessione: 17:00 NY → 17:00 NY) ---
+            float prevClose = 0, prevHigh = float.MinValue, prevLow = float.MaxValue;
+            bool foundPrevDay = false;
+
+            // La sessione precedente va dalle 17:00 NY di due giorni fa alle 17:00 NY di ieri
+            DateTime prevSessionEnd = new DateTime(openBarDate.Year, openBarDate.Month, openBarDate.Day, closeHour, closeMinute, 0).AddDays(-1);
+            DateTime prevSessionStart = prevSessionEnd.AddDays(-1);
+
+            for (int i = openBarIndex + 1; i < Math.Min(Count, openBarIndex + 1000); i++)
+            {
+                DateTime barNy = TimeZoneInfo.ConvertTimeFromUtc(Time(i).ToUniversalTime(), NyTz);
+
+                if (barNy >= prevSessionEnd) continue;   // ancora nella sessione corrente
+                if (barNy < prevSessionStart) break;      // troppo indietro, usciamo
+
+                // Prima barra incontrata = più recente prima delle 17:00 = close di sessione
+                if (!foundPrevDay)
+                {
+                    prevClose = (float)Close(i);
+                    foundPrevDay = true;
+                }
+                if ((float)High(i) > prevHigh) prevHigh = (float)High(i);
+                if ((float)Low(i) < prevLow) prevLow = (float)Low(i);
+            }
+
+            if (!foundPrevDay) return;
+
+            // --- CHIAMATA AL SERVER ---
+            var request = new ContextQueryRequest
+            {
+                Symbol = ticker,
+                SessionId = effectiveSession,
+                SessionOpen = sessionOpen,
+                PrevClose = prevClose,
+                PrevHigh = prevHigh,
+                PrevLow = prevLow,
+                IntradayHigh = intradayHigh,
+                IntradayLow = intradayLow,
+                TopK = 5
+            };
+
+            string json = JsonSerializer.Serialize(request);
+            var content = new StringContent(json, Encoding.UTF8, "application/json");
+            var response = await httpClient.PostAsync(ContextUrl, content);
+
+            if (response.IsSuccessStatusCode)
+            {
+                string resJson = await response.Content.ReadAsStringAsync();
+                contextResults = JsonSerializer.Deserialize<List<MatchResponse>>(resJson);
+            }
+        }
+        catch (Exception ex) { Log("ContextError: " + ex.Message); }
     }
 
     public override void OnPaintChart(PaintChartEventArgs args)
@@ -275,7 +398,7 @@ public class RetroVis : Indicator
     private void DrawResultsPanel(Graphics gr)
     {
         // Altezza ottimizzata senza winrate
-        Rectangle panelRect = new Rectangle(toggleRect.X, toggleRect.Y + 35, 330, 300);
+        Rectangle panelRect = new Rectangle(toggleRect.X, toggleRect.Y + 35, 330, lastPanelHeight);
         gr.FillRectangle(new SolidBrush(Color.FromArgb(220, 10, 10, 10)), panelRect);
 
         int tx = panelRect.X + 12, ty = panelRect.Y + 12;
@@ -290,19 +413,24 @@ public class RetroVis : Indicator
         string dynamicTitle = "";
         if(effectiveSession != null)
         {
-            dynamicTitle = $"{effectiveSession} ({this.currentCandleCount} CANDLES)";
+            string candlesInfo = this.currentCandleCount < this.MinCandles ? $"Waiting for {this.MinCandles} candles" : $"{this.currentCandleCount} candles";
+            dynamicTitle = $"{effectiveSession} ({candlesInfo})";
         }
         else
         {
             dynamicTitle = "NO ACTIVE SESSION";
+            lastPanelHeight = 100;
         }
         gr.DrawString(dynamicTitle, titleFont, Brushes.White, tx, ty);
         float titleWidth = gr.MeasureString(dynamicTitle, titleFont).Width;
         if (results.Count > 0)
         {
-            gr.DrawString(deltaText, titleFont, deltaBrush, tx + titleWidth, ty);
+            gr.DrawString(deltaText, titleFont, deltaBrush,2+ titleWidth, ty);
         }
         ty += 22;
+        ty += 10;
+        gr.DrawString("CANDLE MATCHES", titleFont, Brushes.White, tx, ty);
+        ty += 18;
 
         if (results == null || results.Count == 0)
         {
@@ -379,6 +507,62 @@ public class RetroVis : Indicator
 
             ty += 25;
         }
+
+        // --- CONTEXT MATCHES ---
+        if (contextResults != null && contextResults.Count > 0)
+        {
+             ty += 10;
+            gr.DrawString("CONTEXT MATCHES", titleFont, Brushes.White, tx, ty);
+            ty += 18;
+            // --- CONTEXT MATCHES SUMMARY ---
+            double ctxSumMfe = 0, ctxSumMae = 0, ctxSumEos = 0;
+            foreach (var m in contextResults)
+            {
+                ctxSumMfe += Math.Abs((m.Mfe / 100.0) * currentPriceBase);
+                ctxSumMae += Math.Abs((m.Mae / 100.0) * currentPriceBase);
+                ctxSumEos += (m.EodReturn / 100.0) * currentPriceBase;
+            }
+            double ctxAvgMfe = ctxSumMfe / contextResults.Count;
+            double ctxAvgMae = ctxSumMae / contextResults.Count;
+            double ctxAvgEos = ctxSumEos / contextResults.Count;
+            double ctxEdge = ctxAvgMfe / (ctxAvgMae == 0 ? 1 : ctxAvgMae);
+            double ctxShortEdge = ctxAvgMae / (ctxAvgMfe == 0 ? 1 : ctxAvgMfe);
+
+            Brush ctxEdgeBrush = Brushes.White;
+            if (ctxEdge > 2.0) ctxEdgeBrush = Brushes.LimeGreen;
+            else if (ctxShortEdge > 2.0) ctxEdgeBrush = Brushes.Red;
+            else if (ctxEdge > 1.2 || ctxShortEdge > 1.2) ctxEdgeBrush = Brushes.Gold;
+
+            Rectangle ctxSummaryRect = new Rectangle(tx, ty, panelRect.Width - 24, 45);
+            gr.DrawRectangle(Pens.DimGray, ctxSummaryRect);
+
+            gr.DrawString($"AVG UP: +{ctxAvgMfe:F1} pts | AVG DOWN: -{ctxAvgMae:F1} pts", dataFont, Brushes.LightGray, tx + 5, ty + 5);
+            gr.DrawString($"EDGE RATIO: {Math.Max(ctxEdge, ctxShortEdge):F2} | AVG EOS: {ctxAvgEos:+0.0;-0.0}", dataFont, ctxEdgeBrush, tx + 5, ty + 22);
+
+            ty += 55;
+
+            foreach (var m in contextResults)
+            {
+                float similarity = 1.0f / (1.0f + m.Distance) * 100f;
+                double eodPts = (m.EodReturn / 100.0) * currentPriceBase;
+                double mfePts = (m.Mfe / 100.0) * currentPriceBase;
+                double maePts = (m.Mae / 100.0) * currentPriceBase;
+
+                var ctxRect = new RectangleF(tx, ty, panelRect.Width - 24, 40);
+                gr.FillRectangle(new SolidBrush(Color.FromArgb(0, 180, 100, 30)), ctxRect);
+                contextClickAreas.Add(ctxRect);
+                contextDates.Add(m.Date);
+
+                gr.DrawString($"{m.Date} {m.Time} (MATCH:{similarity:F1}%)", dataFont, Brushes.Gray, tx, ty);
+                ty += 15;
+
+                string vals = $"UP: {mfePts:+0.0}  DOWN: {maePts:0.0}  (EOS: {eodPts:+0.0;-0.0})";
+                gr.DrawString(vals, dataFont, Brushes.White, tx + 10, ty);
+                ty += 25;
+            }
+            lastPanelHeight = ty - panelRect.Y + 10;
+            //gr.FillRectangle(new SolidBrush(Color.FromArgb(220, 10, 10, 10)), panelRect);
+        }
     }
 
     private void OnChartClick(object sender, ChartMouseNativeEventArgs e)
@@ -417,6 +601,18 @@ public class RetroVis : Indicator
                     break; // Clic intercettato, non serve controllare altri match
                 }
             }
+            for (int i = 0; i < contextClickAreas.Count; i++)
+            {
+                if (contextClickAreas[i].Contains(e.Location))
+                {
+                    string date = contextDates[i];
+                    string url = $"http://127.0.0.1:9999/visualize?symbol={ticker}&date={date}";
+                    try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = url, UseShellExecute = true }); }
+                    catch (Exception ex) { Log("Errore apertura browser: " + ex.Message); }
+                    break;
+                }
+            }
+
         }
     }
 
@@ -458,7 +654,7 @@ public class RetroVis : Indicator
 
     public static void Log(string m){
         
-        //Core.Instance.Loggers.Log($"[RetroVis] {m}", LoggingLevel.Trading);
+        Core.Instance.Loggers.Log($"[RetroVis] {m}", LoggingLevel.Trading);
     } 
 
     #region Models
@@ -488,6 +684,18 @@ public class RetroVis : Indicator
         [JsonPropertyName("eod_return")] public float EodReturn { get; set; }
         [JsonPropertyName("mfe")] public float Mfe { get; set; }
         [JsonPropertyName("mae")] public float Mae { get; set; }
+    }
+    public class ContextQueryRequest
+    {
+        [JsonPropertyName("symbol")] public string Symbol { get; set; }
+        [JsonPropertyName("session_id")] public string SessionId { get; set; }
+        [JsonPropertyName("session_open")] public float SessionOpen { get; set; }
+        [JsonPropertyName("prev_close")] public float PrevClose { get; set; }
+        [JsonPropertyName("prev_high")] public float PrevHigh { get; set; }
+        [JsonPropertyName("prev_low")] public float PrevLow { get; set; }
+        [JsonPropertyName("intraday_high")] public float IntradayHigh { get; set; }
+        [JsonPropertyName("intraday_low")] public float IntradayLow { get; set; }
+        [JsonPropertyName("top_k")] public int TopK { get; set; }
     }
     #endregion
 }

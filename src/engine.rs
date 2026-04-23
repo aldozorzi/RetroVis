@@ -112,21 +112,116 @@ impl SearchEngine<f32> {
         outcomes.into_iter().take(top_k).collect()
     }
 
-    pub fn get_day_candles(&self, date: &str) -> Vec<crate::models::ChartDataResponse> {
-        self.dataset.iter()
-            .find(|d| d.date == date)
-            .map(|d| {
-                d.candles.iter().map(|c| crate::models::ChartDataResponse {
-                    // Uniamo data e ora per il frontend: "2024-04-21 09:30:00"
-                    time: format!("{} {}", c.date, c.time), 
-                    open: c.open,
-                    high: c.high,
-                    low: c.low,
-                    close: c.close,
-                }).collect()
+    pub fn get_day_candles(&self, date: &str, include_prev: bool) -> Vec<crate::models::ChartDataResponse> {
+
+        let pos = self.dataset.iter().position(|d| d.date == date);
+
+        let Some(pos) = pos else {
+            return Vec::new();
+        };
+
+        let prev_candles: &[crate::models::RawCandle<f32>] = if include_prev && pos > 0 {
+            &self.dataset[pos - 1].candles
+        } else {
+            &[]
+        };
+
+        let curr_candles = &self.dataset[pos].candles;
+
+        prev_candles.iter()
+            .chain(curr_candles.iter())
+            .map(|c| crate::models::ChartDataResponse {
+                time: format!("{} {}", c.date, c.time),
+                open: c.open,
+                high: c.high,
+                low: c.low,
+                close: c.close,
             })
-            .unwrap_or_else(Vec::new)
+            .collect()
     }
 
-    
+    pub fn find_context_matches(
+    &self,
+    current_context: &crate::models::Context,
+    top_k: usize,
+    session: &crate::models::SessionConfig,
+) -> Vec<crate::models::MatchOutcome> {
+        let mut outcomes = Vec::new();
+
+        for (i, day) in self.dataset.iter().enumerate() {
+            if i == 0 { continue; }
+
+            let Some(start_t_ny) = Self::get_ny_time_for_session(&day.date, session) else {
+                continue;
+            };
+
+            let Some(start_idx) = day.candles.iter().position(|c| {
+                c.time == start_t_ny.format("%H:%M:%S").to_string()
+            }) else {
+                continue;
+            };
+
+            // Dati del giorno precedente
+            let prev_day = &self.dataset[i - 1];
+            let prev_close = match prev_day.candles.last() {
+                Some(c) => c.close,
+                None => continue,
+            };
+            let prev_high = prev_day.candles.iter().map(|c| c.high).fold(f32::NEG_INFINITY, f32::max);
+            let prev_low  = prev_day.candles.iter().map(|c| c.low).fold(f32::INFINITY, f32::min);
+
+            // Max/min delle candele del giorno corrente prima dell'apertura di sessione
+            let (intraday_high, intraday_low) = if start_idx == 0 {
+                let open = day.candles[0].open;
+                (open, open)
+            } else {
+                let h = day.candles[0..start_idx].iter().map(|c| c.high).fold(f32::NEG_INFINITY, f32::max);
+                let l = day.candles[0..start_idx].iter().map(|c| c.low).fold(f32::INFINITY, f32::min);
+                (h, l)
+            };
+
+            let session_open = day.candles[start_idx].open;
+            let hist_context = crate::models::Context::new(
+                session_open,
+                prev_close,
+                prev_high,
+                prev_low,
+                intraday_high,
+                intraday_low,
+            );
+
+            let dist = current_context.distance(&hist_context);
+
+            let end_idx = if session.id == "LONDON_OPEN" {
+                day.candles.iter()
+                    .position(|c| c.time == "09:25:00")
+                    .unwrap_or(day.candles.len() - 1)
+            } else {
+                day.candles.len() - 1
+            };
+            let actual_end = if end_idx > start_idx { end_idx } else { day.candles.len() - 1 };
+
+            let baseline = session_open;
+            let mut max_high = baseline;
+            let mut min_low  = baseline;
+            let last_close   = day.candles[actual_end].close;
+
+            for c in &day.candles[start_idx..=actual_end] {
+                if c.high > max_high { max_high = c.high; }
+                if c.low  < min_low  { min_low  = c.low;  }
+            }
+
+            outcomes.push(crate::models::MatchOutcome {
+                date: day.date.clone(),
+                time: day.candles[start_idx].time.clone(),
+                distance: dist,
+                eod_ret_pct: ((last_close - baseline) / baseline) * 100.0,
+                mfe_pct: ((max_high - baseline) / baseline) * 100.0,
+                mae_pct: ((min_low  - baseline) / baseline) * 100.0,
+            });
+        }
+
+        outcomes.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+        outcomes.into_iter().take(top_k).collect()
+    }
 }

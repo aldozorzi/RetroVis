@@ -90,3 +90,55 @@ pub struct ChartDataResponse {
     pub low: f32,
     pub close: f32,
 }
+
+pub struct Context {
+    pub gap_pct: f32,
+    pub pos_in_prev_range: f32,
+    pub dist_from_prev_high: f32,
+    pub dist_from_intraday_high: f32,
+    pub dist_from_intraday_low: f32,
+}
+
+impl Context {
+    pub fn new(
+        session_open: f32,
+        prev_close: f32,
+        prev_high: f32,
+        prev_low: f32,
+        intraday_high: f32,
+        intraday_low: f32,
+    ) -> Self {
+        let prev_range = (prev_high - prev_low).max(1e-6);
+        Self {
+            gap_pct: ((session_open - prev_close) / prev_close) * 100.0,
+            pos_in_prev_range: (session_open - prev_low) / prev_range,
+            dist_from_prev_high: ((prev_high - session_open) / prev_high) * 100.0,
+            dist_from_intraday_high: ((intraday_high - session_open) / intraday_high.max(1e-6)) * 100.0,
+            dist_from_intraday_low: ((session_open - intraday_low) / intraday_low.max(1e-6)) * 100.0,
+        }
+    }
+
+    pub fn distance(&self, other: &Context) -> f32 {
+        let mut d = 0.0;
+        d += (self.gap_pct - other.gap_pct).powi(2);
+        d += (self.pos_in_prev_range - other.pos_in_prev_range).powi(2);
+        d += (self.dist_from_prev_high - other.dist_from_prev_high).powi(2);
+        d += (self.dist_from_intraday_high - other.dist_from_intraday_high).powi(2);
+        d += (self.dist_from_intraday_low - other.dist_from_intraday_low).powi(2);
+        d.sqrt()
+    }
+}
+
+// Request che arriva dal frontend per la ricerca contestuale
+#[derive(Debug, Deserialize)]
+pub struct ContextQueryRequest {
+    pub symbol: String,
+    pub session_id: String,
+    pub session_open: f32,
+    pub prev_close: f32,
+    pub prev_high: f32,
+    pub prev_low: f32,
+    pub intraday_high: f32,
+    pub intraday_low: f32,
+    pub top_k: usize,
+}
