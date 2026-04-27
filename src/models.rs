@@ -56,6 +56,7 @@ pub struct QueryRequest<T> {
     pub symbol: String,
     pub session_id: String,
     pub candles: Vec<RawCandle<T>>,
+    pub top_k: usize,
 }
 
 pub struct MatchOutcome {
@@ -67,14 +68,28 @@ pub struct MatchOutcome {
     pub mae_pct: f32,
 }
 
+#[derive(serde::Serialize)]
+pub struct FullResponse {
+    pub summary: AggregateData,
+    pub matches: Vec<MatchResponse>,
+}
+
 #[derive(Debug,Serialize)]
 pub struct MatchResponse {
     pub date: String,
     pub time: String,
-    pub distance: f32,
-    pub eod_return: f32,
-    pub mfe: f32,
-    pub mae: f32,
+    pub similarity: f32,
+    pub eos_pts: f32,
+    pub up_pts: f32,
+    pub down_pts: f32,
+}
+
+#[derive(serde::Serialize)]
+pub struct AggregateData {
+    pub avg_up: f32,
+    pub avg_down: f32,
+    pub avg_eos: f32,
+    pub edge_ratio: f32,
 }
 
 pub struct AppState {

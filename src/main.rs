@@ -3,7 +3,7 @@ use axum::{
     routing::{post, get},
     Json,
     Router,
-    response::{Html,IntoResponse}
+    response::{Html}
 };
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -13,7 +13,7 @@ mod models;
 mod parser;
 mod engine;
 
-use models::{QueryRequest,AppState,MatchResponse,ContextQueryRequest,Context};
+use models::{QueryRequest,AppState,FullResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData};
 use engine::SearchEngine;
 
 #[tokio::main]
@@ -67,59 +67,38 @@ async fn shutdown_signal() {
 }
 async fn search_handler(
     State(state): State<Arc<AppState>>,
-    Json(payload): Json<QueryRequest<f32>>,
-) -> Json<Vec<MatchResponse>> {
+    Json(req): Json<QueryRequest<f32>>,
+) -> Json<FullResponse> {
     /*
     // --- LOG DI DEBUG ---
     println!("--- NUOVA RICHIESTA RICEVUTA ---");
-    println!("Simbolo: {}", payload.symbol);
-    println!("Sessione: {}", payload.session_id);
-    println!("Numero candele inviate: {}", payload.candles.len());
-    println!("Span: {} - {}", payload.candles.first().unwrap().time, payload.candles.last().unwrap().time);
+    println!("Simbolo: {}", req.symbol);
+    println!("Sessione: {}", req.session_id);
+    println!("Numero candele inviate: {}", req.candles.len());
+    println!("Span: {} - {}", req.candles.first().unwrap().time, req.candles.last().unwrap().time);
     
-    if let Some(first) = payload.candles.first() {
+    if let Some(first) = req.candles.first() {
         println!("Prima candela inviata: {} {}", first.date, first.time);
     }
     // --------------------
     */
 
+    let engine = state.engines.get(&req.symbol).expect("Ticker not found");
+    let session = state.sessions.get(&req.session_id).expect("Session not found");
 
-    // 1. SELEZIONE DEL MOTORE IN BASE AL SYMBOL (Risolve il warning)
-    let engine = match state.engines.get(&payload.symbol) {
-        Some(e) => e,
-        None => {
-            eprintln!("Simbolo non supportato: {}", payload.symbol);
-            return Json(vec![]);
-        }
-    };
-
-    // 2. Selezione della sessione
-    let session_config = match state.sessions.get(&payload.session_id) {
-        Some(config) => config,
-        None => return Json(vec![]),
-    };
-
-    if payload.candles.is_empty() { return Json(vec![]); }
-
-    let baseline = payload.candles[0].open;
-    let current_pattern: Vec<models::NormalizedCandle<f32>> = payload.candles
+    let baseline = req.candles[0].open;
+    let current_pattern: Vec<models::NormalizedCandle<f32>> = req.candles
         .iter()
         .map(|r| models::NormalizedCandle::from_raw(r, baseline))
         .collect();
 
-    // 3. Eseguiamo la ricerca sul motore specifico dell'asset richiesto
-    let matches = engine.find_matches(&current_pattern, 5, session_config);
-    
-    let response: Vec<MatchResponse> = matches.iter().map(|m| MatchResponse {
-        date: m.date.clone(),
-        time: m.time.clone(),
-        distance: m.distance,
-        eod_return: m.eod_ret_pct,
-        mfe: m.mfe_pct,
-        mae: m.mae_pct,
-    }).collect();
+    let matches = engine.find_matches(&current_pattern, req.top_k.min(10), session);
+    let (summary, matches) = calculate_aggregates(&matches, baseline);
 
-    Json(response)
+    Json(FullResponse{
+        summary,
+        matches,
+    })
 }
 
 async fn day_details_handler(
@@ -139,20 +118,14 @@ async fn day_details_handler(
 async fn context_matches_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ContextQueryRequest>,
-) -> impl IntoResponse {
-    /*
+) -> Json<FullResponse> {
+    
     println!(">>> /context_matches ricevuto: symbol={}, session={}", req.symbol, req.session_id);
     println!("    session_open={}, prev_close={}, prev_high={}, prev_low={}", req.session_open, req.prev_close, req.prev_high, req.prev_low);
     println!("    intraday_high={}, intraday_low={}", req.intraday_high, req.intraday_low);
-    */
-    let engine = match state.engines.get(&req.symbol) {
-        Some(e) => e,
-        None => return Json(serde_json::json!({"error": "symbol not found"})),
-    };
-    let session = match state.sessions.get(&req.session_id) {
-        Some(s) => s,
-        None => return Json(serde_json::json!({"error": "session not found"})),
-    };
+    
+    let engine = state.engines.get(&req.symbol).expect("Ticker not found");
+    let session = state.sessions.get(&req.session_id).expect("Session not found");
 
     let current_context = Context::new(
         req.session_open,
@@ -165,16 +138,55 @@ async fn context_matches_handler(
 
     let matches = engine.find_context_matches(&current_context, req.top_k.min(10), session);
 
-    let response: Vec<MatchResponse> = matches.iter().map(|m| MatchResponse {
-        date: m.date.clone(),
-        time: m.time.clone(),
-        distance: m.distance,
-        eod_return: m.eod_ret_pct,
-        mfe: m.mfe_pct,
-        mae: m.mae_pct,
+    let (summary, custom_matches) = calculate_aggregates(&matches, req.session_open);
+
+    Json(FullResponse {
+        summary,
+        matches: custom_matches,
+    })
+}
+
+fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (AggregateData, Vec<MatchResponse>) {
+    let mut sum_mfe = 0.0;
+    let mut sum_mae = 0.0;
+    let mut sum_eos = 0.0;
+
+    let matches: Vec<MatchResponse> = matches.iter().map(|m| {
+        let up = (m.mfe_pct / 100.0) * current_price;
+        let down = (m.mae_pct / 100.0) * current_price;
+        let eos = (m.eod_ret_pct / 100.0) * current_price;
+        
+        sum_mfe += up.abs();
+        sum_mae += down.abs();
+        sum_eos += eos;
+
+        MatchResponse {
+            date: m.date.clone(),
+            time: m.time.clone(),
+            similarity: 1.0 / (1.0 + m.distance) * 100.0,
+            up_pts: up,
+            down_pts: down,
+            eos_pts: eos,
+        }
     }).collect();
 
-    Json(serde_json::json!(response))
+    let count = matches.len() as f32;
+    let avg_up = if count > 0.0 { sum_mfe / count } else { 0.0 };
+    let avg_down = if count > 0.0 { sum_mae / count } else { 0.0 };
+    let avg_eos = if count > 0.0 { sum_eos / count } else { 0.0 };
+    
+    let long_edge = avg_up / (if avg_down == 0.0 { 1.0 } else { avg_down });
+    let short_edge = avg_down / (if avg_up == 0.0 { 1.0 } else { avg_up });
+
+    (
+        AggregateData {
+            avg_up,
+            avg_down,
+            avg_eos,
+            edge_ratio: long_edge.max(short_edge),
+        },
+        matches
+    )
 }
 
 async fn visualize_handler() -> Html<String> {

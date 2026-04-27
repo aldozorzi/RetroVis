@@ -14,10 +14,9 @@ impl SearchEngine<f32> {
         use chrono::TimeZone;
         use chrono_tz::Tz;
 
-        // Parsing esplicito con risultato Option invece di unwrap_or fallback silenzioso
         let target_date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
             .or_else(|_| NaiveDate::parse_from_str(date_str, "%d/%m/%Y"))
-            .ok()?; // Ritorna None se il parsing fallisce, invece di usare una data sbagliata
+            .ok()?; 
 
         let session_tz: Tz = session.timezone.parse().ok()?;
         let ny_tz: Tz = "America/New_York".parse().unwrap();
@@ -161,7 +160,7 @@ impl SearchEngine<f32> {
                 continue;
             };
 
-            // Dati del giorno precedente
+            // prev day data
             let prev_day = &self.dataset[i - 1];
             let prev_close = match prev_day.candles.last() {
                 Some(c) => c.close,
@@ -170,7 +169,7 @@ impl SearchEngine<f32> {
             let prev_high = prev_day.candles.iter().map(|c| c.high).fold(f32::NEG_INFINITY, f32::max);
             let prev_low  = prev_day.candles.iter().map(|c| c.low).fold(f32::INFINITY, f32::min);
 
-            // Max/min delle candele del giorno corrente prima dell'apertura di sessione
+            // Max/min current day before session start
             let (intraday_high, intraday_low) = if start_idx == 0 {
                 let open = day.candles[0].open;
                 (open, open)
