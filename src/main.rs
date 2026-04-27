@@ -119,11 +119,11 @@ async fn context_matches_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ContextQueryRequest>,
 ) -> Json<FullResponse> {
-    
+    /*
     println!(">>> /context_matches ricevuto: symbol={}, session={}", req.symbol, req.session_id);
     println!("    session_open={}, prev_close={}, prev_high={}, prev_low={}", req.session_open, req.prev_close, req.prev_high, req.prev_low);
     println!("    intraday_high={}, intraday_low={}", req.intraday_high, req.intraday_low);
-    
+    */
     let engine = state.engines.get(&req.symbol).expect("Ticker not found");
     let session = state.sessions.get(&req.session_id).expect("Session not found");
 
