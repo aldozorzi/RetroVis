@@ -12,8 +12,9 @@ use chrono::NaiveTime;
 mod models;
 mod parser;
 mod engine;
+mod cache;
 
-use models::{QueryRequest,AppState,FullResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData};
+use models::{QueryRequest,AppState,FullResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle};
 use engine::SearchEngine;
 
 #[tokio::main]
@@ -42,6 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shared_state = Arc::new(AppState {
         engines,
         sessions,
+        cache: Arc::new(crate::cache::RetroVisCache::new()),
     });
 
     let app = Router::new()
@@ -83,22 +85,38 @@ async fn search_handler(
     // --------------------
     */
 
-    let engine = state.engines.get(&req.symbol).expect("Ticker not found");
-    let session = state.sessions.get(&req.session_id).expect("Session not found");
+    let mut last_result = None;
+    let timeframe_seconds = crate::cache::RetroVisCache::timeframe_to_seconds(&req.timeframe);
 
-    let baseline = req.candles[0].open;
-    let current_pattern: Vec<models::NormalizedCandle<f32>> = req.candles
-        .iter()
-        .map(|r| models::NormalizedCandle::from_raw(r, baseline))
-        .collect();
+    for i in 1..=req.candles.len() {
+        let historical_slice = &req.candles[0..i];
+        let current_ts = req.timestamp - ((req.candles.len() - i) as i64 * timeframe_seconds);
+        println!("Recupero dati");
+        let cached_res = state.cache.get_or_calculate_candle(
+            req.symbol.clone(),
+            req.timeframe.clone(),
+            req.session_id.clone(),
+            current_ts,
+            || {
+                println!("Calcolando");
+                let engine = state.engines.get(&req.symbol).expect("Ticker not found");
+                let session = state.sessions.get(&req.session_id).expect("Session not found");
 
-    let matches = engine.find_matches(&current_pattern, req.top_k.min(10), session);
-    let (summary, matches) = calculate_aggregates(&matches, baseline);
+                let normalized: Vec<NormalizedCandle<f32>> = historical_slice
+                    .iter()
+                    .map(|raw| NormalizedCandle::from_raw(raw, req.session_open))
+                    .collect();
 
-    Json(FullResponse{
-        summary,
-        matches,
-    })
+                let matches = engine.find_matches(&normalized, req.top_k.min(10), session);
+                let (summary, custom_matches) = calculate_aggregates(&matches, req.session_open);
+
+                CachedResult::from_aggregates(summary, custom_matches)
+            }
+        );
+        last_result = Some(cached_res);
+    }
+    println!("DAti recuperati, costruzione risposta...");
+    Json(FullResponse::from(last_result.expect("No candles provided")))
 }
 
 async fn day_details_handler(
@@ -124,26 +142,32 @@ async fn context_matches_handler(
     println!("    session_open={}, prev_close={}, prev_high={}, prev_low={}", req.session_open, req.prev_close, req.prev_high, req.prev_low);
     println!("    intraday_high={}, intraday_low={}", req.intraday_high, req.intraday_low);
     */
-    let engine = state.engines.get(&req.symbol).expect("Ticker not found");
-    let session = state.sessions.get(&req.session_id).expect("Session not found");
+    let symbol = req.symbol.clone();
+    let session_id = req.session_id.clone();
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string(); 
 
-    let current_context = Context::new(
-        req.session_open,
-        req.prev_close,
-        req.prev_high,
-        req.prev_low,
-        req.intraday_high,
-        req.intraday_low,
+    let cached_res = state.cache.get_or_calculate_context(
+        &symbol, 
+        &session_id, 
+        &date, 
+        || {
+            let engine = state.engines.get(&req.symbol).expect("Ticker not found");
+            let session = state.sessions.get(&req.session_id).expect("Session not found");
+
+            let current_context = Context::new(
+                req.session_open, req.prev_close, req.prev_high, 
+                req.prev_low, req.intraday_high, req.intraday_low,
+            );
+
+            let matches = engine.find_context_matches(&current_context, req.top_k.min(10), session);
+
+            let (summary, custom_matches) = calculate_aggregates(&matches, req.session_open);
+
+            CachedResult::from_aggregates(summary, custom_matches)
+        }
     );
 
-    let matches = engine.find_context_matches(&current_context, req.top_k.min(10), session);
-
-    let (summary, custom_matches) = calculate_aggregates(&matches, req.session_open);
-
-    Json(FullResponse {
-        summary,
-        matches: custom_matches,
-    })
+    Json(FullResponse::from(cached_res))
 }
 
 fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (AggregateData, Vec<MatchResponse>) {

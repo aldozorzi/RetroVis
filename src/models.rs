@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use chrono::NaiveTime;
 use std::collections::HashMap;
 use crate::engine::SearchEngine;
-
+use std::sync::Arc;
 
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -57,6 +57,9 @@ pub struct QueryRequest<T> {
     pub session_id: String,
     pub candles: Vec<RawCandle<T>>,
     pub top_k: usize,
+    pub timestamp: i64,
+    pub timeframe: String,
+    pub session_open: f32,
 }
 
 pub struct MatchOutcome {
@@ -73,6 +76,20 @@ pub struct FullResponse {
     pub summary: AggregateData,
     pub matches: Vec<MatchResponse>,
 }
+impl From<CachedResult> for FullResponse {
+    fn from(cached: CachedResult) -> Self {
+        Self {
+            summary: AggregateData {
+                avg_up: cached.avg_up as f32,
+                avg_down: cached.avg_down as f32,
+                avg_eos: cached.avg_eos as f32,
+                edge_ratio: cached.edge_ratio as f32,
+            },
+            matches: cached.matches.into_iter().map(MatchResponse::from).collect(),
+        }
+    }
+}
+
 
 #[derive(Debug,Serialize)]
 pub struct MatchResponse {
@@ -82,6 +99,19 @@ pub struct MatchResponse {
     pub eos_pts: f32,
     pub up_pts: f32,
     pub down_pts: f32,
+}
+
+impl From<HistoricalMatch> for MatchResponse {
+    fn from(m: HistoricalMatch) -> Self {
+        Self {
+            date: m.date,
+            time: "".to_string(), // O gestiscilo se serve
+            similarity: m.match_score as f32,
+            up_pts: m.up as f32,
+            down_pts: m.down as f32,
+            eos_pts: m.eos as f32,
+        }
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -95,6 +125,7 @@ pub struct AggregateData {
 pub struct AppState {
     pub engines: HashMap<String, SearchEngine<f32>>,
     pub sessions: HashMap<String, SessionConfig>,
+    pub cache: Arc<crate::cache::RetroVisCache>,
 }
 
 #[derive(Debug, Serialize)]
@@ -144,7 +175,6 @@ impl Context {
     }
 }
 
-// Request che arriva dal frontend per la ricerca contestuale
 #[derive(Debug, Deserialize)]
 pub struct ContextQueryRequest {
     pub symbol: String,
@@ -156,4 +186,63 @@ pub struct ContextQueryRequest {
     pub intraday_high: f32,
     pub intraday_low: f32,
     pub top_k: usize,
+}
+
+#[derive(Hash, PartialEq, Eq, Clone)]
+pub struct CandleCacheKey {
+    pub asset: String,
+    pub timeframe: String,
+    pub session_id: String, 
+    pub timestamp: i64, 
+}
+
+#[derive(Hash, PartialEq, Eq, Clone)]
+pub struct ContextCacheKey {
+    pub asset: String,
+    pub session_id: String, 
+    pub date: String,       
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct HistoricalMatch {
+    pub date: String,      
+    pub match_score: f64,  
+    pub up: f64,           
+    pub down: f64,        
+    pub eos: f64,        
+}
+
+impl From<MatchResponse> for HistoricalMatch {
+    fn from(m: MatchResponse) -> Self {
+        Self {
+            date: m.date,
+            match_score: m.similarity as f64,
+            up: m.up_pts as f64,
+            down: m.down_pts as f64,
+            eos: m.eos_pts as f64,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CachedResult {
+    pub edge_ratio: f64,
+    pub avg_eos: f64,
+    pub avg_up: f64,
+    pub avg_down: f64,
+    pub now_pts: f64,
+    pub matches: Vec<HistoricalMatch>,
+}
+
+impl CachedResult {
+    pub fn from_aggregates(summary: AggregateData, matches: Vec<MatchResponse>) -> Self {
+        Self {
+            edge_ratio: summary.edge_ratio as f64,
+            avg_eos: summary.avg_eos as f64,
+            avg_up: summary.avg_up as f64,
+            avg_down: summary.avg_down as f64,
+            now_pts: 0.0,
+            matches: matches.into_iter().map(HistoricalMatch::from).collect(),
+        }
+    }
 }

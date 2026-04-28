@@ -103,8 +103,11 @@ public class RetroVis : Indicator
         this.lastProcessedBarTime = default(DateTime);
         candlesResults.Clear();
         matchClickAreas.Clear();
+        matchDates.Clear();
         contextClickAreas.Clear();
+        contextDates.Clear();
         this.currentCandleCount = 0;
+        lastContextSessionDate = "";
     }
 
     protected override void OnUpdate(UpdateArgs args)
@@ -119,7 +122,11 @@ public class RetroVis : Indicator
             candlesResults.Clear();
             matchClickAreas.Clear();
             contextClickAreas.Clear();
+            matchDates.Clear();
+            contextDates.Clear();
+
             currentCandleCount = 0;
+            lastContextSessionDate = "";
         }
 
         HistoryAggregationTime aggregation = (HistoryAggregationTime)this.HistoricalData.Aggregation;
@@ -137,12 +144,19 @@ public class RetroVis : Indicator
     {
         try
         {
+            var lastCandle = candles[candles.Count - 1];
+            string fullDateTimeStr = $"{lastCandle.Date} {lastCandle.Time}";
+            DateTime dt = DateTime.ParseExact(fullDateTimeStr, "yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+            long finalTimestamp = (long)(dt - new DateTime(1970, 1, 1)).TotalSeconds;
             var request = new QueryRequest
             {
                 Symbol = ticker,
                 SessionId = effectiveSession,
                 Candles = candles,
-                TopK = 5
+                TopK = 5,
+                Timestamp = finalTimestamp,
+                Timeframe = GetFormattedTimeframe(),
+                SessionOpen = (float)currentPriceBase
             };
             
             string json = JsonSerializer.Serialize(request);
@@ -205,8 +219,9 @@ public class RetroVis : Indicator
             float prevClose = 0, prevHigh = float.MinValue, prevLow = float.MaxValue;
             bool foundPrevDay = false;
 
-            DateTime prevSessionEnd = new DateTime(openBarDate.Year, openBarDate.Month, openBarDate.Day, closeHour, closeMinute, 0);
-            prevSessionEnd = new DateTime(PrevTradingDay(prevSessionEnd).Year, PrevTradingDay(prevSessionEnd).Month, PrevTradingDay(prevSessionEnd).Day, closeHour, closeMinute, 0);
+            DateTime currentSessionOpen = new DateTime(openBarDate.Year, openBarDate.Month, openBarDate.Day, closeHour, closeMinute, 0);
+
+            DateTime prevSessionEnd = new DateTime(PrevTradingDay(currentSessionOpen).Year, PrevTradingDay(currentSessionOpen).Month, PrevTradingDay(currentSessionOpen).Day, closeHour, closeMinute, 0);
             DateTime prevSessionStart = new DateTime(PrevTradingDay(prevSessionEnd).Year, PrevTradingDay(prevSessionEnd).Month, PrevTradingDay(prevSessionEnd).Day, closeHour, closeMinute, 0);
 
             Log("prevSessionEnd: "+ prevSessionEnd+ " - prevSessionStart:" + prevSessionStart);
@@ -288,10 +303,12 @@ public class RetroVis : Indicator
         string deltaText = $" | NOW: {deltaSign}{currentDelta:F1}";
         Brush deltaBrush = currentDelta >= 0 ? Brushes.LimeGreen : Brushes.Red;
 
+        
+
         string dynamicTitle = "";
         if(effectiveSession != null)
         {
-            string candlesInfo = this.currentCandleCount < this.MinCandles ? $"Waiting for {this.MinCandles} candles" : $"{this.currentCandleCount} candles";
+            string candlesInfo = this.currentCandleCount < this.MinCandles ? $"Waiting for {(this.MinCandles > 1 ? this.MinCandles : "FIRST")} candle{(this.MinCandles > 1 ? "s" : "")}" : $"{this.currentCandleCount} candles";
             dynamicTitle = $"{effectiveSession} ({candlesInfo})";
         }
         else
@@ -305,43 +322,57 @@ public class RetroVis : Indicator
         {
             gr.DrawString(deltaText, titleFont, deltaBrush,2+ titleWidth, ty);
         }
-        ty += 22;
-        ty += 10;
+        ty += 32;
         gr.DrawString("CANDLE MATCHES", titleFont, Brushes.White, tx, ty);
         ty += 18;
-
-        if (candlesResults == null || candlesResults.Count == 0)
-        {
-            gr.DrawString("WAITING FOR DATA...", titleFont, Brushes.Gray, tx, ty);
-            return;
-        }
-        string summaryLine1 = $"AVG UP: +{candlesSummary.AvgUp:F1} pts | AVG DOWN: -{candlesSummary.AvgDown:F1} pts";
         
-        Brush edgeBrush = Brushes.White;
-        if (candlesSummary.EdgeRatio > 2.0)
-            edgeBrush = (candlesSummary.AvgUp > Math.Abs(candlesSummary.AvgDown)) ? Brushes.LimeGreen : Brushes.Red;
-        else if (candlesSummary.EdgeRatio > 1.2)
-            edgeBrush = Brushes.Gold;
-        string summaryLine2 = $"EDGE RATIO: {(Math.Abs(candlesSummary.AvgDown) > candlesSummary.AvgUp ? "-" : "+")}{candlesSummary.EdgeRatio:F2} | AVG EOS: {candlesSummary.AvgEos:+0.0;-0.0}";
-
-        gr.DrawString(summaryLine1, dataFont, Brushes.LightGray, tx + 5, ty + 5);
-        gr.DrawString(summaryLine2, dataFont, edgeBrush, tx + 5, ty + 22);
-
-        ty += 55;
-
-        foreach (var m in candlesResults)
+        if ( this.currentCandleCount < this.MinCandles)
         {
-            matchClickAreas.Add(new RectangleF(tx, ty, panelRect.Width - 30, 35));
-            matchDates.Add(m.Date);
-
-            gr.DrawString($"{m.Date} {m.Time} (MATCH:{m.Similarity:F1}%)", dataFont, Brushes.Gray, tx, ty);
-            ty += 15;
-
-            string vals = $"UP: {m.UpPts:+0.0}  DOWN: {m.DownPts:0.0}  (EOS: {m.EosPts:+0.0;-0.0})";
-            gr.DrawString(vals, dataFont, Brushes.White, tx + 10, ty);
-
-            ty += 25;
+            gr.DrawString($"WAITING FOR {(this.MinCandles > 1 ? this.MinCandles : "FIRST")} CLOSED CANDLE{(this.MinCandles > 1 ? "S" : "")} ", titleFont, Brushes.Gray, tx, ty+5);
+            lastPanelHeight = ty - panelRect.Y + 30;
+            ty += 18;
+            //return;
         }
+        else if (candlesResults == null || candlesResults.Count == 0)
+        {
+            gr.DrawString("WAITING FOR DATA...", titleFont, Brushes.Gray, tx, ty+5);
+            lastPanelHeight = ty - panelRect.Y + 30;
+            ty += 18;
+            //return;
+        }
+        else
+        {
+            Rectangle candleSummaryRect = new Rectangle(tx, ty, panelRect.Width - 24, 45);
+            gr.DrawRectangle(Pens.DimGray, candleSummaryRect);
+            string summaryLine1 = $"AVG UP: +{candlesSummary.AvgUp:F1} pts | AVG DOWN: -{candlesSummary.AvgDown:F1} pts";
+        
+            Brush edgeBrush = Brushes.White;
+            if (candlesSummary.EdgeRatio > 2.0)
+                edgeBrush = (candlesSummary.AvgUp > Math.Abs(candlesSummary.AvgDown)) ? Brushes.LimeGreen : Brushes.Red;
+            else if (candlesSummary.EdgeRatio > 1.2)
+                edgeBrush = Brushes.Gold;
+            string summaryLine2 = $"EDGE RATIO: {(Math.Abs(candlesSummary.AvgDown) > candlesSummary.AvgUp ? "-" : "+")}{candlesSummary.EdgeRatio:F2} | AVG EOS: {candlesSummary.AvgEos:+0.0;-0.0}";
+
+            gr.DrawString(summaryLine1, dataFont, Brushes.LightGray, tx + 5, ty + 5);
+            gr.DrawString(summaryLine2, dataFont, edgeBrush, tx + 5, ty + 22);
+
+            ty += 55;
+
+            foreach (var m in candlesResults)
+            {
+                matchClickAreas.Add(new RectangleF(tx, ty, panelRect.Width - 30, 35));
+                matchDates.Add(m.Date);
+
+                gr.DrawString($"{m.Date} {m.Time} (MATCH:{m.Similarity:F1}%)", dataFont, Brushes.Gray, tx, ty);
+                ty += 15;
+
+                string vals = $"UP: {m.UpPts:+0.0}  DOWN: {m.DownPts:0.0}  (EOS: {m.EosPts:+0.0;-0.0})";
+                gr.DrawString(vals, dataFont, Brushes.White, tx + 10, ty);
+
+                ty += 25;
+            }
+        }
+        
 
         if (contextResults != null && contextResults.Count > 0)
         {
@@ -451,8 +482,11 @@ public class RetroVis : Indicator
         candlesResults.Clear();
         matchClickAreas.Clear();
         contextClickAreas.Clear();
-        currentCandleCount = 0;
+        matchDates.Clear();
+        contextDates.Clear();
 
+        currentCandleCount = 0;
+        lastContextSessionDate = "";
         // Esegui l'analisi sulla candela cliccata
         ProcessAnalysis(candleIndex);
     }
@@ -501,7 +535,7 @@ public class RetroVis : Indicator
         Log("openBarIndex: "+ openBarIndex);
 
         if (openBarIndex == -1) return;
-        //else if (openBarIndex >= MaxCandles) return;
+        else if (openBarIndex >= MaxCandles && candlesResults.Count > 0) return;
 
         if (openBarIndex != -1)
         {
@@ -515,6 +549,7 @@ public class RetroVis : Indicator
         Log("effectiveSession: " + effectiveSession);
         // --- FETCH CONTEXT ---
         string sessionDateKey = $"{sessionToUse}_{Time(openBarIndex):yyyy-MM-dd}";
+        Log("sessionDateKey: " + sessionDateKey+ " - lastContextSessionDate: "+ lastContextSessionDate);
         if (sessionDateKey != lastContextSessionDate)
         {
             lastContextSessionDate = sessionDateKey;
@@ -546,6 +581,23 @@ public class RetroVis : Indicator
         currentDelta = (float)Close(refIndex) - currentPriceBase;
         this.currentCandleCount = candlesToInquire.Count;
         _ = FetchMatchesAsync(candlesToInquire);
+    }
+
+    private string GetFormattedTimeframe()
+    {
+        HistoryAggregationTime aggregation = (HistoryAggregationTime)this.HistoricalData.Aggregation;
+
+
+        // Trasforma "5m" in "M5", "15m" in "M15", "1h" in "H1", ecc.
+        string tf = aggregation.Period.Format();
+
+        if (tf.EndsWith("m"))
+            return "M" + tf.Replace("m", "");
+
+        if (tf.EndsWith("h"))
+            return "H" + tf.Replace("h", "");
+
+        return tf; // Fallback se è già nel formato corretto o ignoto
     }
 
     protected override void OnClear()
@@ -604,9 +656,16 @@ public class RetroVis : Indicator
             prev = prev.AddDays(-1);
         return prev;
     }
+
+    private long ConvertToTimestamp(DateTime value)
+    {
+        long epoch = (value.Ticks - 621355968000000000) / 10000000;
+        return epoch;
+    }
+
     public static void Log(string m){
         
-        // Core.Instance.Loggers.Log($"[RetroVis] {m}", LoggingLevel.Trading);
+        Core.Instance.Loggers.Log($"[RetroVis] {m}", LoggingLevel.Trading);
     } 
 
     #region Models
@@ -616,6 +675,9 @@ public class RetroVis : Indicator
         [JsonPropertyName("session_id")] public string SessionId { get; set; }
         [JsonPropertyName("candles")] public List<RawCandle> Candles { get; set; }
         [JsonPropertyName("top_k")] public int TopK { get; set; }
+        [JsonPropertyName("timestamp")] public long Timestamp { get; set; }
+        [JsonPropertyName("timeframe")] public string Timeframe { get; set; }
+        [JsonPropertyName("session_open")] public float SessionOpen { get; set; }
     }
 
     public class RawCandle
