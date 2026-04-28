@@ -75,6 +75,7 @@ pub struct MatchOutcome {
 pub struct FullResponse {
     pub summary: AggregateData,
     pub matches: Vec<MatchResponse>,
+    pub ai_comment: Option<String>,
 }
 impl From<CachedResult> for FullResponse {
     fn from(cached: CachedResult) -> Self {
@@ -86,6 +87,7 @@ impl From<CachedResult> for FullResponse {
                 edge_ratio: cached.edge_ratio as f32,
             },
             matches: cached.matches.into_iter().map(MatchResponse::from).collect(),
+            ai_comment: None,
         }
     }
 }
@@ -126,6 +128,7 @@ pub struct AppState {
     pub engines: HashMap<String, SearchEngine<f32>>,
     pub sessions: HashMap<String, SessionConfig>,
     pub cache: Arc<crate::cache::RetroVisCache>,
+    pub gemini_broker: crate::gemini::GeminiBroker,
 }
 
 #[derive(Debug, Serialize)]
@@ -232,6 +235,7 @@ pub struct CachedResult {
     pub avg_down: f64,
     pub now_pts: f64,
     pub matches: Vec<HistoricalMatch>,
+    pub ai_analysis: Option<String>,
 }
 
 impl CachedResult {
@@ -243,6 +247,17 @@ impl CachedResult {
             avg_down: summary.avg_down as f64,
             now_pts: 0.0,
             matches: matches.into_iter().map(HistoricalMatch::from).collect(),
+            ai_analysis: None,
         }
     }
+}
+
+#[derive(serde::Deserialize)]
+pub struct AiAnalysisRequest {
+    pub symbol: String,
+    pub session_id: String,
+    pub candles_len: usize,
+    pub timestamp: i64,
+    pub timeframe: String,
+    pub current_price_action: f64,
 }

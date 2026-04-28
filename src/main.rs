@@ -3,23 +3,31 @@ use axum::{
     routing::{post, get},
     Json,
     Router,
-    response::{Html}
+    response::{Html, IntoResponse},
+    
 };
 use std::sync::Arc;
 use std::collections::HashMap;
 use chrono::NaiveTime;
+use serde_json::json;
+use dotenvy::dotenv;
+use std::env;
+use chrono::DateTime;
 
 mod models;
 mod parser;
 mod engine;
 mod cache;
+mod gemini;
 
-use models::{QueryRequest,AppState,FullResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle};
+use models::{QueryRequest,AppState,FullResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey};
+use gemini::GeminiBroker;
 use engine::SearchEngine;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     clear_terminal();
+    dotenv().ok();
     let mut engines = HashMap::new();
 
     let nq_data = parser::load_and_process("data/nq-M5.csv","NQ")?;
@@ -40,10 +48,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         timezone: "America/New_York".to_string(),
     });
 
+    let api_key = env::var("GEMINI_API_KEY")
+        .expect("GEMINI_API_KEY non trovata nel file .env");
+
+    // Passala al broker
+    let gemini_broker = GeminiBroker::new(api_key);
+
+
     let shared_state = Arc::new(AppState {
         engines,
         sessions,
         cache: Arc::new(crate::cache::RetroVisCache::new()),
+        gemini_broker: gemini_broker,
     });
 
     let app = Router::new()
@@ -51,6 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/day-details", get(day_details_handler))
         .route("/visualize", get(visualize_handler))
         .route("/context_matches", post(context_matches_handler))
+        .route("/get_ai_analysis", post(ai_analysis_handler))
         .with_state(shared_state);
     println!("Server in ascolto su http://127.0.0.1:9999");
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 9999));
@@ -58,6 +75,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+
+    
 
     Ok(())
 }
@@ -91,14 +110,14 @@ async fn search_handler(
     for i in 1..=req.candles.len() {
         let historical_slice = &req.candles[0..i];
         let current_ts = req.timestamp - ((req.candles.len() - i) as i64 * timeframe_seconds);
-        println!("Recupero dati");
+
         let cached_res = state.cache.get_or_calculate_candle(
             req.symbol.clone(),
             req.timeframe.clone(),
             req.session_id.clone(),
             current_ts,
             || {
-                println!("Calcolando");
+
                 let engine = state.engines.get(&req.symbol).expect("Ticker not found");
                 let session = state.sessions.get(&req.session_id).expect("Session not found");
 
@@ -113,10 +132,88 @@ async fn search_handler(
                 CachedResult::from_aggregates(summary, custom_matches)
             }
         );
+
         last_result = Some(cached_res);
     }
-    println!("DAti recuperati, costruzione risposta...");
-    Json(FullResponse::from(last_result.expect("No candles provided")))
+    let response = FullResponse::from(last_result.expect("No candles provided"));
+    
+    Json(response)
+}
+
+pub async fn ai_analysis_handler(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AiAnalysisRequest>,
+) -> impl IntoResponse {
+
+    let key = CandleCacheKey {
+        asset: req.symbol.clone(),
+        timeframe: req.timeframe.clone(),
+        session_id: req.session_id.clone(),
+        timestamp: req.timestamp,
+    };
+
+    println!("Richiesta analisi AI per {}-{}-{}-{} @ {}", req.symbol, req.session_id, req.timeframe, req.current_price_action, req.timestamp);
+    
+    // --- STEP 1: CHECK CACHE (LOCK CHIUSO SUBITO) ---
+    // Usiamo un blocco {} per essere sicuri che ogni riferimento alla cache venga rimosso prima del .await
+    let cached_analysis = {
+        state.cache.candle_results.get(&key).and_then(|entry| entry.ai_analysis.clone())
+    };
+
+    if let Some(analysis) = cached_analysis {
+        println!("Analisi AI trovata in cache per {}-{}-{}-{} @ {}", req.symbol, req.session_id, req.timeframe, req.current_price_action, req.timestamp);
+        return Json(json!({ "status": "success", "analysis": analysis, "cached": true }));
+    }
+
+    // --- STEP 2: PREPARAZIONE DATI (FUORI DAI LOCK) ---
+    println!("Building full_history for Gemini request for {}-{}-{}-{} @ {}", req.symbol, req.session_id, req.timeframe, req.candles_len, req.timestamp);   
+    
+    let full_history = state.cache.get_session_history(
+        &req.symbol,
+        &req.timeframe,
+        &req.session_id,
+        req.timestamp,
+        req.candles_len
+    );
+
+    let date_str = DateTime::from_timestamp(req.timestamp, 0)
+        .map(|dt| dt.format("%Y-%m-%d").to_string())
+        .unwrap_or_default();
+
+    let context_res = state.cache.get_or_calculate_context(
+        &req.symbol,
+        &req.session_id,
+        &date_str,
+        || {
+            // Nota: Se get_or_calculate_context usa lock interni, assicurati che non rimangano aperti
+            unimplemented!("I dati di contesto dovrebbero essere già presenti")
+        }
+    );
+
+    let ai_data = json!({
+        "symbol": req.symbol,
+        "session_id": req.session_id,
+        "current_price_action": req.current_price_action,
+        "evolution_history": full_history,
+        "context": context_res,
+    });
+
+    // --- STEP 3: CHIAMATA GEMINI (THREAD LIBERO) ---
+    // Qui il thread può essere sospeso e ripreso senza causare deadlock
+    match state.gemini_broker.ask_analysis(ai_data).await {
+        Ok(text) => {
+            // --- STEP 4: SALVATAGGIO IN CACHE (LOCK NUOVO) ---
+            if let Some(mut entry) = state.cache.candle_results.get_mut(&key) {
+                entry.ai_analysis = Some(text.clone());
+            }
+
+            Json(json!({ "status": "success", "analysis": text, "cached": false }))
+        },
+        Err(e) => {
+            eprintln!("Errore Gemini durante l'handler: {}", e);
+            Json(json!({ "status": "error", "analysis": format!("Errore Gemini: {}", e) }))
+        }
+    }
 }
 
 async fn day_details_handler(

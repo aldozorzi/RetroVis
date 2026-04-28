@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
 using System.Drawing;
 using System.Net.Http;
+using System.Net.Http.Json;
+using System.Reflection.Metadata;
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
@@ -20,12 +23,15 @@ public class RetroVis : Indicator
     [InputParameter("Min Candles for Pattern", 1, 1, 15, 1)]
     public int MinCandles = 2;
 
-    [InputParameter("Max Candles for Pattern", 1, 1, 20, 1)]
+    [InputParameter("Max Candles for Pattern", 2, 1, 20, 1)]
     public int MaxCandles = 12;
 
-    [InputParameter("Webserver URL", 2)]
+    [InputParameter("Webserver URL", 3)]
     public string ServerUrl = "http://127.0.0.1:9999";
-    
+
+    [InputParameter("Enable AI Analysis",4)]
+    public bool EnableAiAnalysis { get; set; } = true;
+
     #endregion
 
     #region Internal Fields
@@ -36,8 +42,7 @@ public class RetroVis : Indicator
     private Rectangle toggleRect = new Rectangle(5, 80, 120, 25);
     private double currentPriceBase = 0;
     private DateTime lastProcessedBarTime;
-    private Font titleFont;
-    private Font dataFont;
+    
     private int currentCandleCount = 0;
     private string ticker = "";
     private string effectiveSession;
@@ -64,6 +69,20 @@ public class RetroVis : Indicator
     private bool isBacktestMode = false;
     private Rectangle backtestBtnRect = new Rectangle(130, 80, 130, 25); // Accanto al primo bottone
 
+    private string currentAnalysisText;
+    
+
+    private Font titleFont = new Font("Arial", 10, FontStyle.Bold);
+    private Font dataFont = new Font("Consolas", 9);
+    private Font btnfont = new Font("Arial", 7, FontStyle.Bold);
+    private Font headerFont = new Font("Consolas", 11, FontStyle.Bold);
+    private Font bodyFont = new Font("Consolas", 10);
+    private SolidBrush panelBgBrush = new SolidBrush(Color.FromArgb(220, 10, 10, 10));
+    private SolidBrush ctxBgBrush = new SolidBrush(Color.FromArgb(0, 180, 100, 30));
+
+    private float aiBoxHeight = 100f;
+
+    private bool chartMouseDownReceived = false;
     #endregion
 
     public RetroVis() : base()
@@ -74,6 +93,8 @@ public class RetroVis : Indicator
 
     protected override void OnInit()
     {
+        httpClient.Timeout = TimeSpan.FromSeconds(30);
+
         this.SearchUrl = $"{ServerUrl.TrimEnd('/')}/search";
         this.ContextUrl = $"{ServerUrl.TrimEnd('/')}/context_matches";
         try
@@ -88,26 +109,42 @@ public class RetroVis : Indicator
 
         lastProcessedBarTime = DateTime.MinValue;
         if (this.CurrentChart != null)
+        {
+            this.CurrentChart.MouseClick -= OnChartClick;
             this.CurrentChart.MouseClick += OnChartClick;
+            this.CurrentChart.MouseClick -= OnChartMouseDown;
+            this.CurrentChart.MouseDown += OnChartMouseDown;
+        }
+            
 
-        this.titleFont = new Font("Arial", 10, FontStyle.Bold);
-        this.dataFont = new Font("Consolas", 9);
+        
 
         initTicker(false);
         
     }
 
-    protected override void OnSettingsUpdated()
+    protected void ResetLists()
     {
-        base.OnSettingsUpdated();
-        this.lastProcessedBarTime = default(DateTime);
-        candlesResults.Clear();
         matchClickAreas.Clear();
         matchDates.Clear();
         contextClickAreas.Clear();
         contextDates.Clear();
+    }
+
+    protected void Reset()
+    {
+        this.lastProcessedBarTime = default(DateTime);
+        candlesResults.Clear();
+        ResetLists();
         this.currentCandleCount = 0;
         lastContextSessionDate = "";
+        currentAnalysisText = "Loading new Analysis...";
+    }
+
+    protected override void OnSettingsUpdated()
+    {
+        base.OnSettingsUpdated();
+        Reset();
     }
 
     protected override void OnUpdate(UpdateArgs args)
@@ -119,14 +156,7 @@ public class RetroVis : Indicator
         if (currentBarTime == lastProcessedBarTime) return;
         else
         {
-            candlesResults.Clear();
-            matchClickAreas.Clear();
-            contextClickAreas.Clear();
-            matchDates.Clear();
-            contextDates.Clear();
-
-            currentCandleCount = 0;
-            lastContextSessionDate = "";
+            Reset();
         }
 
         HistoryAggregationTime aggregation = (HistoryAggregationTime)this.HistoricalData.Aggregation;
@@ -160,20 +190,58 @@ public class RetroVis : Indicator
             };
             
             string json = JsonSerializer.Serialize(request);
-            Log("json:" + json);
+            //Log("json:" + json);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
             var response = await httpClient.PostAsync(SearchUrl, content);
-            Log(response.ToString());
+            //Log(response.ToString());
             if (response.IsSuccessStatusCode)
             {
                 string resJson = await response.Content.ReadAsStringAsync();
                 var fullData = JsonSerializer.Deserialize<FullResponse>(resJson);
-                Log("Success:" + resJson);
+                if (fullData == null) return;
+                // Log("Success");
                 candlesResults = fullData.Matches;
                 candlesSummary = fullData.Summary;
+                _ =FetchAiAnalysis(candles);
             }
         }
         catch (Exception ex) { Log("Error:"+ ex.Message); }
+    }
+
+    private async Task FetchAiAnalysis(List<RawCandle> candles)
+    {
+        if(!EnableAiAnalysis) return;
+        try
+        {
+            var lastCandle = candles[candles.Count - 1];
+            string fullDateTimeStr = $"{lastCandle.Date} {lastCandle.Time}";
+            DateTime dt = DateTime.ParseExact(fullDateTimeStr, "yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+            long finalTimestamp = (long)(dt - new DateTime(1970, 1, 1)).TotalSeconds;
+            var request = new AiAnalysisQueryRequest
+            {
+
+                Symbol = ticker,
+                SessionId = effectiveSession,
+                CandlesLen = candles.Count,
+                Timeframe = GetFormattedTimeframe(),
+                Timestamp = finalTimestamp,
+                CurrentPriceAction = lastCandle.Close,
+            };
+            //Log("CurrentPriceAction: " + request.CurrentPriceAction);
+            string json = JsonSerializer.Serialize(request);
+            var content = new StringContent(json, Encoding.UTF8, "application/json");
+            var response = await httpClient.PostAsync($"{ServerUrl.TrimEnd('/')}/get_ai_analysis", content);
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<AiResponse>();
+
+                if (result != null && result.status == "success")
+                {
+                    this.currentAnalysisText = result.analysis;
+                }
+            }
+        }
+        catch (Exception ex) { Log("AI Analysis Error: " + ex.Message); }
     }
 
     private async Task FetchContextMatchesAsync(int openBarIndex)
@@ -224,7 +292,7 @@ public class RetroVis : Indicator
             DateTime prevSessionEnd = new DateTime(PrevTradingDay(currentSessionOpen).Year, PrevTradingDay(currentSessionOpen).Month, PrevTradingDay(currentSessionOpen).Day, closeHour, closeMinute, 0);
             DateTime prevSessionStart = new DateTime(PrevTradingDay(prevSessionEnd).Year, PrevTradingDay(prevSessionEnd).Month, PrevTradingDay(prevSessionEnd).Day, closeHour, closeMinute, 0);
 
-            Log("prevSessionEnd: "+ prevSessionEnd+ " - prevSessionStart:" + prevSessionStart);
+            //Log("prevSessionEnd: "+ prevSessionEnd+ " - prevSessionStart:" + prevSessionStart);
 
             for (int i = openBarIndex + 1; i < Math.Min(Count, openBarIndex + 1000); i++)
             {
@@ -259,15 +327,14 @@ public class RetroVis : Indicator
             string json = JsonSerializer.Serialize(request);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
             var response = await httpClient.PostAsync(ContextUrl, content);
-            Log(response
-                .ToString());
+            //Log(response.ToString());
 
             if (response.IsSuccessStatusCode)
             {
                 string resJson = await response.Content.ReadAsStringAsync();
 
                 var fullData = JsonSerializer.Deserialize<FullResponse>(resJson);
-
+                if (fullData == null) return;
                 contextResults = fullData.Matches;
                 contextSummary = fullData.Summary;
             }
@@ -280,7 +347,7 @@ public class RetroVis : Indicator
         Graphics gr = args.Graphics;
         gr.FillRectangle(isPanelVisible ? Brushes.IndianRed : Brushes.SteelBlue, toggleRect);
         string label = isPanelVisible ? "HIDE PANEL" : "SHOW PANEL";
-        Font btnfont = new Font("Arial", 7, FontStyle.Bold);
+        
         float titleWidth = gr.MeasureString(label, btnfont).Width;
         gr.DrawString(label, btnfont, Brushes.White, toggleRect.X + (float)Math.Round((toggleRect.Width - titleWidth) / 2), toggleRect.Y + 7);
 
@@ -289,13 +356,19 @@ public class RetroVis : Indicator
         float labelWidth = gr.MeasureString(btLabel, btnfont).Width;
         gr.DrawString(btLabel, btnfont, Brushes.White, backtestBtnRect.X + (float)Math.Round((backtestBtnRect.Width - labelWidth) / 2), backtestBtnRect.Y + 7);
 
-        if (isPanelVisible) DrawResultsPanel(gr);
+        if (isPanelVisible)
+        {
+            DrawResultsPanel(gr);
+            if(EnableAiAnalysis)
+                DrawAiPanel(gr);
+        }
     }
 
     private void DrawResultsPanel(Graphics gr)
     {
+        ResetLists();
         Rectangle panelRect = new Rectangle(toggleRect.X, toggleRect.Y + 35, 330, lastPanelHeight);
-        gr.FillRectangle(new SolidBrush(Color.FromArgb(220, 10, 10, 10)), panelRect);
+        gr.FillRectangle(panelBgBrush, panelRect);
 
         int tx = panelRect.X + 12, ty = panelRect.Y + 12;
 
@@ -398,7 +471,7 @@ public class RetroVis : Indicator
             {
 
                 var ctxRect = new RectangleF(tx, ty, panelRect.Width - 24, 40);
-                gr.FillRectangle(new SolidBrush(Color.FromArgb(0, 180, 100, 30)), ctxRect);
+                gr.FillRectangle(ctxBgBrush, ctxRect);
                 contextClickAreas.Add(ctxRect);
                 contextDates.Add(m.Date);
 
@@ -411,10 +484,71 @@ public class RetroVis : Indicator
             }
             lastPanelHeight = ty - panelRect.Y + 10;
         }
+        
     }
 
+    private void DrawAiPanel(Graphics gr)
+    {
+        if (string.IsNullOrEmpty(this.currentAnalysisText)) return;
+
+        string cleanedAnalysis = this.currentAnalysisText
+                 .Replace("**", "")         // Rimuovi il Markdown
+                 .Replace("\n\n", "\n")     // Rimpiazza i doppi a capo con a capo singolo
+                 .Trim();                   // Rimuovi spazi extra
+        
+
+        // --- CONFIGURAZIONE ---
+        float x = 340;
+        float y = toggleRect.Y + 35; // Punto di partenza sotto i tuoi moduli
+        float width = 450; // Larghezza fissa del blocco
+        float padding = 12;
+
+        // --- 1. CALCOLO ALTEZZA NECESSARIA ---
+        // Puliamo il markdown come prima per avere misure reali
+        string cleanText = this.currentAnalysisText.Replace("**", "");
+
+        // Misuriamo quanto spazio occupa il testo data la larghezza 'width'
+        SizeF textSize = gr.MeasureString(cleanText, bodyFont, (int)width);
+
+        // L'altezza totale è: Titolo + Testo misurato + Padding vari
+        float newHeight = headerFont.Height + textSize.Height + (padding * 3);
+
+        // --- 2. DISEGNO SFONDO (Autoadattivo) ---
+        // Usiamo l'altezza calcolata al volo o quella salvata al ciclo precedente
+        var bgRect = new RectangleF(x, y, width + (padding * 2), newHeight);
+        using (var bgBrush = new SolidBrush(Color.FromArgb(200, 15, 15, 15)))
+        {
+            gr.FillRectangle(bgBrush, bgRect);
+            gr.DrawRectangle(Pens.Gray, Rectangle.Round(bgRect)); // Bordo sottile
+        }
+
+        // --- 3. DISEGNO TESTO ---
+        // Titolo
+        gr.DrawString("AI ANALYSIS", headerFont, Brushes.Orange, x + padding, y + padding);
+
+        // Corpo del testo (senza alcun flag di troncamento o NoWrap)
+        var bodyRect = new RectangleF(
+            x + padding,
+            y + padding + headerFont.Height + 5,
+            width,
+            textSize.Height + 10
+        );
+
+        gr.DrawString(cleanText, bodyFont, Brushes.LightGray, bodyRect);
+
+        // --- 4. AGGIORNAMENTO VARIABILE PER CICLO SUCCESSIVO ---
+        this.aiBoxHeight = newHeight;
+
+    }
+    private void OnChartMouseDown(object sender, ChartMouseNativeEventArgs e)
+    {
+        chartMouseDownReceived = true;
+    }
     private void OnChartClick(object sender, ChartMouseNativeEventArgs e)
     {
+        if (!chartMouseDownReceived) return;  // click orfano, ignoralo
+        chartMouseDownReceived = false;
+
         if (toggleRect.Contains(e.Location))
         {
             isPanelVisible = !isPanelVisible;
@@ -436,7 +570,7 @@ public class RetroVis : Indicator
                 {
                     string date = matchDates[i];
                     string url = $"http://127.0.0.1:9999/visualize?symbol={ticker}&date={date}";
-
+                    
                     try
                     {
                         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
@@ -479,14 +613,7 @@ public class RetroVis : Indicator
     protected void RunManualAnalysis(int candleIndex)
     {
         // Pulizia visiva prima del nuovo calcolo
-        candlesResults.Clear();
-        matchClickAreas.Clear();
-        contextClickAreas.Clear();
-        matchDates.Clear();
-        contextDates.Clear();
-
-        currentCandleCount = 0;
-        lastContextSessionDate = "";
+        Reset();
         // Esegui l'analisi sulla candela cliccata
         ProcessAnalysis(candleIndex);
     }
@@ -532,7 +659,7 @@ public class RetroVis : Indicator
                 break;
             }
         }
-        Log("openBarIndex: "+ openBarIndex);
+        //Log("openBarIndex: "+ openBarIndex);
 
         if (openBarIndex == -1) return;
         else if (openBarIndex >= MaxCandles && candlesResults.Count > 0) return;
@@ -546,14 +673,14 @@ public class RetroVis : Indicator
             else if (foundBarTime.Hour == 8 && foundBarTime.Minute == 0)
                 effectiveSession = "LONDON_OPEN";
         }
-        Log("effectiveSession: " + effectiveSession);
+        //Log("effectiveSession: " + effectiveSession);
         // --- FETCH CONTEXT ---
         string sessionDateKey = $"{sessionToUse}_{Time(openBarIndex):yyyy-MM-dd}";
-        Log("sessionDateKey: " + sessionDateKey+ " - lastContextSessionDate: "+ lastContextSessionDate);
+        //Log("sessionDateKey: " + sessionDateKey+ " - lastContextSessionDate: "+ lastContextSessionDate);
         if (sessionDateKey != lastContextSessionDate)
         {
             lastContextSessionDate = sessionDateKey;
-            Log("FetchContextMatchesAsync");
+            //Log("FetchContextMatchesAsync");
             _ = FetchContextMatchesAsync(openBarIndex);
         }
         if ((openBarIndex - refIndex) < MinCandles) return;
@@ -603,7 +730,6 @@ public class RetroVis : Indicator
     protected override void OnClear()
     {
         if (this.CurrentChart != null) this.CurrentChart.MouseClick -= OnChartClick;
-        titleFont?.Dispose(); dataFont?.Dispose();
     }
 
     protected void initTicker(bool useMicro = true)
@@ -665,7 +791,7 @@ public class RetroVis : Indicator
 
     public static void Log(string m){
         
-        Core.Instance.Loggers.Log($"[RetroVis] {m}", LoggingLevel.Trading);
+        // Core.Instance.Loggers.Log($"[RetroVis] {m}", LoggingLevel.Trading);
     } 
 
     #region Models
@@ -678,6 +804,17 @@ public class RetroVis : Indicator
         [JsonPropertyName("timestamp")] public long Timestamp { get; set; }
         [JsonPropertyName("timeframe")] public string Timeframe { get; set; }
         [JsonPropertyName("session_open")] public float SessionOpen { get; set; }
+    }
+
+    public class AiAnalysisQueryRequest
+    {
+
+        [JsonPropertyName("symbol")] public string Symbol { get; set; }
+        [JsonPropertyName("session_id")] public string SessionId { get; set; }
+        [JsonPropertyName("candles_len")] public int CandlesLen { get; set; }
+        [JsonPropertyName("timestamp")] public long Timestamp { get; set; }
+        [JsonPropertyName("timeframe")] public string Timeframe { get; set; }
+        [JsonPropertyName("current_price_action")] public float CurrentPriceAction { get; set; }
     }
 
     public class RawCandle
@@ -725,6 +862,12 @@ public class RetroVis : Indicator
         [JsonPropertyName("intraday_high")] public float IntradayHigh { get; set; }
         [JsonPropertyName("intraday_low")] public float IntradayLow { get; set; }
         [JsonPropertyName("top_k")] public int TopK { get; set; }
+    }
+    public class AiResponse
+    {
+        public string status { get; set; }
+        public string analysis { get; set; }
+        public bool cached { get; set; }
     }
     #endregion
 }
