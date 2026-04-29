@@ -19,8 +19,9 @@ mod parser;
 mod engine;
 mod cache;
 mod gemini;
+mod ai_analysis;
 
-use models::{QueryRequest,AppState,FullResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey};
+use models::{QueryRequest,AppState,FullResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey,AiAnalysisService,AiProvider};
 use gemini::GeminiBroker;
 use engine::SearchEngine;
 
@@ -52,14 +53,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("GEMINI_API_KEY non trovata nel file .env");
 
     // Passala al broker
-    let gemini_broker = GeminiBroker::new(api_key);
+    let cache = Arc::new(cache::RetroVisCache::new());
+    let gemini_broker: Arc<dyn AiProvider> = Arc::new(GeminiBroker::new(api_key));
+    let ai_service = Arc::new(AiAnalysisService::new(
+        gemini_broker.clone(), 
+        cache.clone()
+    ));
 
 
     let shared_state = Arc::new(AppState {
         engines,
         sessions,
-        cache: Arc::new(crate::cache::RetroVisCache::new()),
+        cache,
         gemini_broker: gemini_broker,
+        ai_service: ai_service,
     });
 
     let app = Router::new()
@@ -152,22 +159,6 @@ pub async fn ai_analysis_handler(
         timestamp: req.timestamp,
     };
 
-    println!("Richiesta analisi AI per {}-{}-{}-{} @ {}", req.symbol, req.session_id, req.timeframe, req.current_price_action, req.timestamp);
-    
-    // --- STEP 1: CHECK CACHE (LOCK CHIUSO SUBITO) ---
-    // Usiamo un blocco {} per essere sicuri che ogni riferimento alla cache venga rimosso prima del .await
-    let cached_analysis = {
-        state.cache.candle_results.get(&key).and_then(|entry| entry.ai_analysis.clone())
-    };
-
-    if let Some(analysis) = cached_analysis {
-        println!("Analisi AI trovata in cache per {}-{}-{}-{} @ {}", req.symbol, req.session_id, req.timeframe, req.current_price_action, req.timestamp);
-        return Json(json!({ "status": "success", "analysis": analysis, "cached": true }));
-    }
-
-    // --- STEP 2: PREPARAZIONE DATI (FUORI DAI LOCK) ---
-    println!("Building full_history for Gemini request for {}-{}-{}-{} @ {}", req.symbol, req.session_id, req.timeframe, req.candles_len, req.timestamp);   
-    
     let full_history = state.cache.get_session_history(
         &req.symbol,
         &req.timeframe,
@@ -180,14 +171,10 @@ pub async fn ai_analysis_handler(
         .map(|dt| dt.format("%Y-%m-%d").to_string())
         .unwrap_or_default();
 
-    let context_res = state.cache.get_or_calculate_context(
+    let context_res = state.cache.get_context(
         &req.symbol,
         &req.session_id,
-        &date_str,
-        || {
-            // Nota: Se get_or_calculate_context usa lock interni, assicurati che non rimangano aperti
-            unimplemented!("I dati di contesto dovrebbero essere già presenti")
-        }
+        &date_str
     );
 
     let ai_data = json!({
@@ -198,20 +185,20 @@ pub async fn ai_analysis_handler(
         "context": context_res,
     });
 
-    // --- STEP 3: CHIAMATA GEMINI (THREAD LIBERO) ---
-    // Qui il thread può essere sospeso e ripreso senza causare deadlock
-    match state.gemini_broker.ask_analysis(ai_data).await {
-        Ok(text) => {
-            // --- STEP 4: SALVATAGGIO IN CACHE (LOCK NUOVO) ---
-            if let Some(mut entry) = state.cache.candle_results.get_mut(&key) {
-                entry.ai_analysis = Some(text.clone());
-            }
-
-            Json(json!({ "status": "success", "analysis": text, "cached": false }))
+    // Delegate the analysis to the AiAnalysisService, which will handle caching, coalescing and provider calls internally.
+    match state.ai_service.get_analysis(key, ai_data).await {
+        Ok(analysis) => {
+            Json(json!({ 
+                "status": "success", 
+                "analysis": analysis 
+            }))
         },
         Err(e) => {
-            eprintln!("Errore Gemini durante l'handler: {}", e);
-            Json(json!({ "status": "error", "analysis": format!("Errore Gemini: {}", e) }))
+            eprintln!("Errore durante l'analisi AI: {}", e);
+            Json(json!({ 
+                "status": "error", 
+                "message": format!("Errore analisi: {}", e) 
+            }))
         }
     }
 }

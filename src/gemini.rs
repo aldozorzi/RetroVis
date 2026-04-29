@@ -1,3 +1,8 @@
+use async_trait::async_trait;
+use serde_json::{json, Value};
+use reqwest::Client;
+use crate::models::AiProvider;
+
 const SYSTEM_PROMPT: &str = r#"
 CORE ANALYSIS LOGIC:
 
@@ -26,9 +31,6 @@ OUTPUT FORMAT:
 STRICT: "TRADE" is encouraged when Edge and Context align and both IDENTIFIED_CURRENT_EDGE and CONTEXT_EDGE are above 2, ESPECIALLY if the current price (NOW) is moving in the opposite direction (Squeeze).
 "#;
 
-use serde_json::json;
-use reqwest::Client;
-
 pub struct GeminiBroker {
     api_key: String,
     http_client: Client,
@@ -42,63 +44,13 @@ impl GeminiBroker {
         }
     }
 
-    pub async fn ask_analysis(&self, session_data: serde_json::Value) -> Result<String, Box<dyn std::error::Error>> {
-        let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={}",
-        self.api_key
-    );
-        // Costruiamo il payload con le System Instructions integrate
-        let payload = json!({
-            "systemInstruction": {
-                "parts": { "text": SYSTEM_PROMPT }
-            },
-            "contents": {
-                "parts": { "text": Self::format_trading_report(
-                    &session_data["symbol"].as_str().unwrap_or("N/A"), 
-                    &session_data["session_id"].as_str().unwrap_or("N/A"), 
-                    &session_data["evolution_history"],
-                    &session_data["context"],
-                    &session_data["current_price_action"].as_f64().unwrap_or(0.0)
-                ) }
-            },
-            "generationConfig": {
-                "temperature": 0.5,
-            }
-        });
-        
-        println!("--- PAYLOAD SENT TO GEMINI ---");
-        /*println!("{}", payload["contents"]["parts"]["text"].as_str().unwrap_or("N/A"));
-        println!("------------------------------");
-        */
-        let payload_string = serde_json::to_string(&payload)?;
-        //println!("DEBUG PAYLOAD STRING: {}", payload_string.len());
+    fn format_trading_report(session_data: &Value) -> String {
+        let symbol = session_data["symbol"].as_str().unwrap_or("N/A");
+        let session = session_data["session_id"].as_str().unwrap_or("N/A");
+        let history = &session_data["evolution_history"];
+        let context = &session_data["context"];
+        let current_price_action = session_data["current_price_action"].as_f64().unwrap_or(0.0);
 
-        let resp = self.http_client.post(&url)
-            .version(reqwest::Version::HTTP_11)
-            .header("Connection", "keep-alive")
-            .header("Content-Length", payload_string.len())
-            .body(payload_string)
-            .send()
-            .await?
-            .json::<serde_json::Value>()
-            .await?;
-        //println!("DEBUG GEMINI RESP: {}", serde_json::to_string_pretty(&resp).unwrap());
-        // Estrazione del testo della risposta
-        let analysis = resp["candidates"][0]["content"]["parts"][0]["text"]
-            .as_str()
-            .unwrap_or("Analisi non disponibile")
-            .to_string();
-        Ok(analysis)
-    }
-
-    fn format_trading_report(
-        symbol: &str, 
-        session: &str, 
-        history: &serde_json::Value,
-        context: &serde_json::Value,
-        current_price_action: &f64
-    ) -> String {
-         //return "test".to_string();
         let mut report = format!("### QUANTITATIVE STATISTICAL ANALYSIS - SYMBOL: {}\n", symbol);
         report.push_str(&format!("SESSION: {}\n\n", session));
 
@@ -176,5 +128,44 @@ impl GeminiBroker {
         report.push_str("\n\nSTRICT INSTRUCTION: Compare IDENTIFIED_CURRENT_EDGE (Momentum) with CONTEXT_EDGE (Structure). If they disagree, the market is in conflict.");
 
         report
+    }
+}
+
+#[async_trait]
+impl AiProvider for GeminiBroker {
+    async fn request_analysis(&self, data: Value) -> Result<String, String> {
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={}",
+            self.api_key
+        );
+
+        let prompt_text = Self::format_trading_report(&data);
+
+        let payload = json!({
+            "systemInstruction": {
+                "parts": { "text": SYSTEM_PROMPT }
+            },
+            "contents": {
+                "parts": { "text": prompt_text }
+            },
+            "generationConfig": {
+                "temperature": 0.5,
+            }
+        });
+        println!("Sending request to Gemini for symbol: {:?}", data["symbol"].as_str().unwrap_or("N/A"));
+        let resp = self.http_client.post(&url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| format!("Errore network: {}", e))?
+            .json::<Value>()
+            .await
+            .map_err(|e| format!("Errore parsing JSON: {}", e))?;
+
+        // Estrazione sicura del testo
+        resp["candidates"][0]["content"]["parts"][0]["text"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| format!("Risposta Gemini non valida: {}", resp))
     }
 }

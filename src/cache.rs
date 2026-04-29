@@ -37,6 +37,24 @@ impl RetroVisCache {
             .clone()
     }
 
+    pub fn get_context(
+        &self, 
+        asset: &str, 
+        session_id: &str, 
+        date: &str
+    ) -> Option<CachedResult> { // Restituisce Option perché il dato potrebbe non esserci
+        let key = ContextCacheKey {
+            asset: asset.to_string(),
+            session_id: session_id.to_string(),
+            date: date.to_string(),
+        };
+
+        // Usiamo .get() per una lettura concorrente condivisa
+        self.context_results
+            .get(&key)
+            .map(|r| r.value().clone()) // Accediamo al valore nel Ref e lo cloniamo
+    }
+
     pub fn get_or_calculate_candle<F>(
         &self,
         asset: String,
@@ -89,6 +107,16 @@ impl RetroVisCache {
         history
     }
 
+    pub fn get_ai_analysis(&self, key: &CandleCacheKey) -> Option<String> {
+        self.candle_results.get(key).and_then(|entry| entry.ai_analysis.clone())
+    }
+
+    pub fn save_ai_analysis(&self, key: &CandleCacheKey, analysis: String) {
+        if let Some(mut entry) = self.candle_results.get_mut(key) {
+            entry.ai_analysis = Some(analysis);
+        }
+    }
+
     pub(crate) fn timeframe_to_seconds(tf: &str) -> i64 {
         match tf {
             "M1" => 60,
@@ -99,4 +127,6 @@ impl RetroVisCache {
             _ => 300,
         }
     }
+
+    
 }

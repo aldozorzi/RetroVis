@@ -3,7 +3,10 @@ use chrono::NaiveTime;
 use std::collections::HashMap;
 use crate::engine::SearchEngine;
 use std::sync::Arc;
-
+use serde_json::Value;
+use dashmap::DashMap;
+use crate::cache::RetroVisCache;
+use tokio::sync::broadcast;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RawCandle<T> {
@@ -128,7 +131,8 @@ pub struct AppState {
     pub engines: HashMap<String, SearchEngine<f32>>,
     pub sessions: HashMap<String, SessionConfig>,
     pub cache: Arc<crate::cache::RetroVisCache>,
-    pub gemini_broker: crate::gemini::GeminiBroker,
+    pub gemini_broker: Arc<dyn AiProvider>,
+    pub ai_service: Arc<AiAnalysisService>,
 }
 
 #[derive(Debug, Serialize)]
@@ -260,4 +264,18 @@ pub struct AiAnalysisRequest {
     pub timestamp: i64,
     pub timeframe: String,
     pub current_price_action: f64,
+}
+
+#[async_trait::async_trait]
+pub trait AiProvider: Send + Sync {
+    async fn request_analysis(&self, data: Value) -> Result<String, String>;
+}
+
+pub struct AiAnalysisService {
+    // Abstract Provider to allow for different implementations (e.g., Gemini, custom LLM, etc.)
+    pub provider: Arc<dyn AiProvider>,
+    // Coalescing map to track in-flight requests and their subscribers
+    pub in_flight: DashMap<CandleCacheKey, broadcast::Sender<String>>,
+    // Global cache manager reference for storing results after successful analysis
+    pub cache: Arc<RetroVisCache>,
 }

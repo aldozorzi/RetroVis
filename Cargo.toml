@@ -14,3 +14,4 @@ chrono-tz = "0.8"
 dashmap = "6.1.0"
 reqwest = { version = "0.13.3", features = ["json"] }
 dotenvy = "0.15.7"
+async-trait = "0.1.89"

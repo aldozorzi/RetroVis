@@ -383,11 +383,14 @@ public class RetroVis : Indicator
         {
             string candlesInfo = this.currentCandleCount < this.MinCandles ? $"Waiting for {(this.MinCandles > 1 ? this.MinCandles : "FIRST")} candle{(this.MinCandles > 1 ? "s" : "")}" : $"{this.currentCandleCount} candles";
             dynamicTitle = $"{effectiveSession} ({candlesInfo})";
+            //currentAnalysisText = null;
         }
         else
         {
             dynamicTitle = "NO ACTIVE SESSION";
             lastPanelHeight = 100;
+            currentAnalysisText = null;
+
         }
         gr.DrawString(dynamicTitle, titleFont, Brushes.White, tx, ty);
         float titleWidth = gr.MeasureString(dynamicTitle, titleFont).Width;
@@ -395,12 +398,19 @@ public class RetroVis : Indicator
         {
             gr.DrawString(deltaText, titleFont, deltaBrush,2+ titleWidth, ty);
         }
+        if (effectiveSession == null)
+        {
+            lastPanelHeight = ty - panelRect.Y + 30;
+            return;
+        }
         ty += 32;
         gr.DrawString("CANDLE MATCHES", titleFont, Brushes.White, tx, ty);
         ty += 18;
         
+
         if ( this.currentCandleCount < this.MinCandles)
         {
+            currentAnalysisText = null;
             gr.DrawString($"WAITING FOR {(this.MinCandles > 1 ? this.MinCandles : "FIRST")} CLOSED CANDLE{(this.MinCandles > 1 ? "S" : "")} ", titleFont, Brushes.Gray, tx, ty+5);
             lastPanelHeight = ty - panelRect.Y + 30;
             ty += 18;
@@ -408,6 +418,7 @@ public class RetroVis : Indicator
         }
         else if (candlesResults == null || candlesResults.Count == 0)
         {
+            currentAnalysisText = null;
             gr.DrawString("WAITING FOR DATA...", titleFont, Brushes.Gray, tx, ty+5);
             lastPanelHeight = ty - panelRect.Y + 30;
             ty += 18;
@@ -492,9 +503,10 @@ public class RetroVis : Indicator
         if (string.IsNullOrEmpty(this.currentAnalysisText)) return;
 
         string cleanedAnalysis = this.currentAnalysisText
-                 .Replace("**", "")         // Rimuovi il Markdown
-                 .Replace("\n\n", "\n")     // Rimpiazza i doppi a capo con a capo singolo
-                 .Trim();                   // Rimuovi spazi extra
+            .Replace("###", "")         // Rimuovi il Markdown     
+            .Replace("**", "")         // Rimuovi il Markdown
+            .Replace("\n\n", "\n")     // Rimpiazza i doppi a capo con a capo singolo
+            .Trim();                   // Rimuovi spazi extra
         
 
         // --- CONFIGURAZIONE ---
@@ -516,11 +528,10 @@ public class RetroVis : Indicator
         // --- 2. DISEGNO SFONDO (Autoadattivo) ---
         // Usiamo l'altezza calcolata al volo o quella salvata al ciclo precedente
         var bgRect = new RectangleF(x, y, width + (padding * 2), newHeight);
-        using (var bgBrush = new SolidBrush(Color.FromArgb(200, 15, 15, 15)))
-        {
-            gr.FillRectangle(bgBrush, bgRect);
-            gr.DrawRectangle(Pens.Gray, Rectangle.Round(bgRect)); // Bordo sottile
-        }
+        
+        gr.FillRectangle(panelBgBrush, bgRect);
+        //gr.DrawRectangle(Pens.Gray, Rectangle.Round(bgRect)); // Bordo sottile
+
 
         // --- 3. DISEGNO TESTO ---
         // Titolo
@@ -621,14 +632,12 @@ public class RetroVis : Indicator
     private void ProcessAnalysis(int refIndex)
     {
         //Log("ProcessAnalysis called with refIndex: " + refIndex);
-        // Usiamo Time(refIndex) invece di DateTime.UtcNow per la logica temporale
         DateTime referenceTimeUtc = Time(refIndex).ToUniversalTime();
 
-        // Determiniamo la sessione basandoci sul tempo della candela di riferimento
+
         DateTime londonNow = TimeZoneInfo.ConvertTimeFromUtc(referenceTimeUtc, LondonTz);
         DateTime nyNow = TimeZoneInfo.ConvertTimeFromUtc(referenceTimeUtc, NyTz);
 
-        // --- LOGICA SESSIONE (Riciclata) ---
         string sessionToUse = SessionId;
         if (SessionId == "AUTO")
         {
@@ -781,12 +790,6 @@ public class RetroVis : Indicator
         while (prev.DayOfWeek == DayOfWeek.Saturday || prev.DayOfWeek == DayOfWeek.Sunday)
             prev = prev.AddDays(-1);
         return prev;
-    }
-
-    private long ConvertToTimestamp(DateTime value)
-    {
-        long epoch = (value.Ticks - 621355968000000000) / 10000000;
-        return epoch;
     }
 
     public static void Log(string m){
