@@ -3,34 +3,6 @@ use serde_json::{json, Value};
 use reqwest::Client;
 use crate::models::AiProvider;
 
-const SYSTEM_PROMPT: &str = r#"
-CORE ANALYSIS LOGIC:
-
-1. STRUCTURAL CONFLUENCE (MANDATORY):
-   - Compare IDENTIFIED_CURRENT_EDGE with CONTEXT_EDGE. 
-   - If signs are the same (e.g., both Negative): ALIGNED STRUCTURE. This is your foundation.
-   - If signs differ: STRUCTURAL CONFLICT. (Verdict: STAY ASIDE).
-
-2. PRICE-EDGE RELATIONSHIP (THE OPPORTUNITY):
-   - Compare the Statistical Bias with IDENTIFIED_CURRENT_NOW.
-   - SCENARIO A (SQUEEZE/MEAN REVERSION): If Stats are SHORT but Price is POSITIVE (or vice versa), this is a "PREMIUM ENTRY ZONE". The price is overextended against the statistical expectation.
-   - SCENARIO B (CONFIRMATION): If Stats and Price move together, it's a standard trend follow.
-
-3. CONVICTION SCORING:
-   - HIGH CONVICTION: Level 1 is ALIGNED + Level 2 is SCENARIO A (Price is fighting the stats, creating a high-value mean reversion opportunity) and both IDENTIFIED_CURRENT_EDGE and CONTEXT_EDGE are above 2.
-   - MEDIUM CONVICTION: Level 1 is ALIGNED + Level 2 is SCENARIO B (Standard alignment).
-
-OUTPUT FORMAT:
-### STRATEGIC VALIDATION
-- BIAS: [SHORT / LONG / NEUTRAL]
-- CONVICTION: [High / Medium / Low]
-- MARKET STATE: [Mean Reversion Opportunity / Trend Following / Conflict]
-- CRITICAL OBSERVATION: [1-2 sentences. Explicitly state if the price (NOW) is offering a "Premium Entry" by moving against the aligned statistical bias.]
-- FINAL VERDICT: [TRADE / MONITOR / STAY ASIDE]
-
-STRICT: "TRADE" is encouraged when Edge and Context align and both IDENTIFIED_CURRENT_EDGE and CONTEXT_EDGE are above 2, ESPECIALLY if the current price (NOW) is moving in the opposite direction (Squeeze).
-"#;
-
 pub struct GeminiBroker {
     api_key: String,
     http_client: Client,
@@ -135,37 +107,54 @@ impl GeminiBroker {
 impl AiProvider for GeminiBroker {
     async fn request_analysis(&self, data: Value) -> Result<String, String> {
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={}",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key={}",
             self.api_key
         );
 
-        let prompt_text = Self::format_trading_report(&data);
-
+        let symbol = data["symbol"].as_str().unwrap_or("N/A");
         let payload = json!({
-            "systemInstruction": {
-                "parts": { "text": SYSTEM_PROMPT }
-            },
-            "contents": {
-                "parts": { "text": prompt_text }
-            },
-            "generationConfig": {
-                "temperature": 0.5,
-            }
+            "systemInstruction": { "parts": { "text": self.system_prompt() } },
+            "contents": { "parts": { "text": Self::format_trading_report(&data) } },
+            "generationConfig": { "temperature": 0.5 }
         });
-        println!("Sending request to Gemini for symbol: {:?}", data["symbol"].as_str().unwrap_or("N/A"));
-        let resp = self.http_client.post(&url)
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| format!("Errore network: {}", e))?
-            .json::<Value>()
-            .await
-            .map_err(|e| format!("Errore parsing JSON: {}", e))?;
 
-        // Estrazione sicura del testo
-        resp["candidates"][0]["content"]["parts"][0]["text"]
-            .as_str()
-            .map(|s| s.to_string())
-            .ok_or_else(|| format!("Risposta Gemini non valida: {}", resp))
+        let backoffs = [500, 1000, 3000];
+        
+        for (attempt, delay) in backoffs.iter().enumerate() {
+            println!("REQ | Symbol: {} | Attempt: {}", symbol, attempt + 1);
+
+            let resp = self.http_client.post(&url)
+                .json(&payload)
+                .send()
+                .await;
+
+            match resp {
+                Ok(r) => {
+                    let status = r.status();
+                    if status.is_success() {
+                        let json = r.json::<Value>().await.map_err(|e| format!("JSON_PARSE_ERR: {}", e))?;
+                        return json["candidates"][0]["content"]["parts"][0]["text"]
+                            .as_str()
+                            .map(|s| s.to_string())
+                            .ok_or_else(|| format!("MALFORMED_RESPONSE: {}", json));
+                    }
+
+                    if status.as_u16() == 503 || status.as_u16() == 429 {
+                        println!("RETRY | Symbol: {} | Status: {} | Delay: {}ms", symbol, status, delay);
+                        tokio::time::sleep(std::time::Duration::from_millis(*delay)).await;
+                        continue;
+                    }
+
+                    return Err(format!("API_ERROR | Status: {} | Body: {:?}", status, r.text().await));
+                }
+                Err(e) => {
+                    println!("NET_ERROR | Symbol: {} | Error: {}", symbol, e);
+                    if attempt == backoffs.len() - 1 { return Err(e.to_string()); }
+                    tokio::time::sleep(std::time::Duration::from_millis(*delay)).await;
+                }
+            }
+        }
+
+        Err("MAX_RETRIES_EXCEEDED".into())
     }
 }

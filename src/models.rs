@@ -7,6 +7,7 @@ use serde_json::Value;
 use dashmap::DashMap;
 use crate::cache::RetroVisCache;
 use tokio::sync::broadcast;
+use indoc::indoc;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RawCandle<T> {
@@ -131,7 +132,7 @@ pub struct AppState {
     pub engines: HashMap<String, SearchEngine<f32>>,
     pub sessions: HashMap<String, SessionConfig>,
     pub cache: Arc<crate::cache::RetroVisCache>,
-    pub gemini_broker: Arc<dyn AiProvider>,
+    pub broker: Arc<dyn AiProvider>,
     pub ai_service: Arc<AiAnalysisService>,
 }
 
@@ -268,6 +269,37 @@ pub struct AiAnalysisRequest {
 
 #[async_trait::async_trait]
 pub trait AiProvider: Send + Sync {
+    fn system_prompt(&self) -> &str{
+        indoc! {"
+            You are a top-tier trading analyst specializing in intraday price action analysis. Your task is to analyze the current market conditions based on a provided report that includes both statistical insights and contextual information. The goal is to determine the strategic validity of entering a trade at the current moment, with a focus on identifying high-conviction mean reversion opportunities.
+            CORE ANALYSIS LOGIC:
+
+            1. STRUCTURAL CONFLUENCE (MANDATORY):
+            - Compare IDENTIFIED_CURRENT_EDGE with CONTEXT_EDGE. 
+            - If signs are the same (e.g., both Negative): ALIGNED STRUCTURE. This is your foundation.
+            - If signs differ: STRUCTURAL CONFLICT. (Verdict: STAY ASIDE).
+
+            2. PRICE-EDGE RELATIONSHIP (THE OPPORTUNITY):
+            - Compare the Statistical Bias with IDENTIFIED_CURRENT_NOW.
+            - SCENARIO A (SQUEEZE/MEAN REVERSION): If Stats are SHORT but Price is POSITIVE (or vice versa), this is a \"PREMIUM ENTRY ZONE\". The price is overextended against the statistical expectation.
+            - SCENARIO B (CONFIRMATION): If Stats and Price move together, it's a standard trend follow.
+
+            3. CONVICTION SCORING:
+            - HIGH CONVICTION: Level 1 is ALIGNED + Level 2 is SCENARIO A (Price is fighting the stats, creating a high-value mean reversion opportunity) and both IDENTIFIED_CURRENT_EDGE and CONTEXT_EDGE are above 2.
+            - MEDIUM CONVICTION: Level 1 is ALIGNED + Level 2 is SCENARIO B (Standard alignment).
+
+            OUTPUT FORMAT:
+            STRATEGIC VALIDATION
+            - BIAS: [SHORT / LONG / NEUTRAL]
+            - CONVICTION: [High / Medium / Low]
+            - MARKET STATE: [Mean Reversion Opportunity / Trend Following / Conflict]
+            - CRITICAL OBSERVATION: [Max 30 words. Explicitly state if the price (NOW) is offering a \"Premium Entry\" by moving against the aligned statistical bias or favorable conditions for continuation.]
+            - FINAL VERDICT: [TRADE / MONITOR / STAY ASIDE]
+
+            STRICT: \"TRADE\" is encouraged when Edge and Context align and both IDENTIFIED_CURRENT_EDGE and CONTEXT_EDGE are above 2, ESPECIALLY if the current price (NOW) is moving in the opposite direction (Squeeze).
+            STRICT: Output only the requested fields. No prose. No preamble.
+        "}
+    }
     async fn request_analysis(&self, data: Value) -> Result<String, String>;
 }
 

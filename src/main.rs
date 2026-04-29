@@ -19,10 +19,12 @@ mod parser;
 mod engine;
 mod cache;
 mod gemini;
+//mod ollama;
 mod ai_analysis;
 
 use models::{QueryRequest,AppState,FullResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey,AiAnalysisService,AiProvider};
 use gemini::GeminiBroker;
+//use ollama::OllamaBroker;
 use engine::SearchEngine;
 
 #[tokio::main]
@@ -49,14 +51,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         timezone: "America/New_York".to_string(),
     });
 
-    let api_key = env::var("GEMINI_API_KEY")
-        .expect("GEMINI_API_KEY non trovata nel file .env");
-
     // Passala al broker
     let cache = Arc::new(cache::RetroVisCache::new());
-    let gemini_broker: Arc<dyn AiProvider> = Arc::new(GeminiBroker::new(api_key));
+    let broker: Arc<dyn AiProvider> = Arc::new(GeminiBroker::new(env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY")));
+    //let broker: Arc<dyn AiProvider> = Arc::new(OllamaBroker::new());
     let ai_service = Arc::new(AiAnalysisService::new(
-        gemini_broker.clone(), 
+        broker.clone(), 
         cache.clone()
     ));
 
@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         engines,
         sessions,
         cache,
-        gemini_broker: gemini_broker,
+        broker: broker,
         ai_service: ai_service,
     });
 

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Drawing;
+using System.Drawing.Printing;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Reflection.Metadata;
@@ -110,8 +111,8 @@ public class RetroVis : Indicator
         lastProcessedBarTime = DateTime.MinValue;
         if (this.CurrentChart != null)
         {
-            this.CurrentChart.MouseClick -= OnChartClick;
-            this.CurrentChart.MouseClick += OnChartClick;
+            this.CurrentChart.MouseClick -= OnChartMouseUp;
+            this.CurrentChart.MouseClick += OnChartMouseUp;
             this.CurrentChart.MouseClick -= OnChartMouseDown;
             this.CurrentChart.MouseDown += OnChartMouseDown;
         }
@@ -418,7 +419,7 @@ public class RetroVis : Indicator
         }
         else if (candlesResults == null || candlesResults.Count == 0)
         {
-            currentAnalysisText = null;
+            if (currentAnalysisText != "Loading new Analysis...") currentAnalysisText = null;
             gr.DrawString("WAITING FOR DATA...", titleFont, Brushes.Gray, tx, ty+5);
             lastPanelHeight = ty - panelRect.Y + 30;
             ty += 18;
@@ -554,9 +555,11 @@ public class RetroVis : Indicator
     private void OnChartMouseDown(object sender, ChartMouseNativeEventArgs e)
     {
         chartMouseDownReceived = true;
+        //Log("OnChartMouseDown - setting chartMouseDownReceived: " + chartMouseDownReceived);
     }
-    private void OnChartClick(object sender, ChartMouseNativeEventArgs e)
+    private void OnChartMouseUp(object sender, ChartMouseNativeEventArgs e)
     {
+        //Log("OnChartMouseUp - reading chartMouseDownReceived: " + chartMouseDownReceived);
         if (!chartMouseDownReceived) return;  // click orfano, ignoralo
         chartMouseDownReceived = false;
 
@@ -738,7 +741,7 @@ public class RetroVis : Indicator
 
     protected override void OnClear()
     {
-        if (this.CurrentChart != null) this.CurrentChart.MouseClick -= OnChartClick;
+       
     }
 
     protected void initTicker(bool useMicro = true)
@@ -779,7 +782,7 @@ public class RetroVis : Indicator
             // Time(i) restituisce l'orario della candela all'indice i
             if (Time(i) <= clickedTime)
             {
-                return i;
+                return Math.Max(0, i-1);
             }
         }
         return -1;
@@ -794,7 +797,7 @@ public class RetroVis : Indicator
 
     public static void Log(string m){
         
-        // Core.Instance.Loggers.Log($"[RetroVis] {m}", LoggingLevel.Trading);
+        Core.Instance.Loggers.Log($"[RetroVis] {m}", LoggingLevel.Trading);
     } 
 
     #region Models
