@@ -76,12 +76,11 @@ pub struct MatchOutcome {
 }
 
 #[derive(serde::Serialize)]
-pub struct FullResponse {
+pub struct MatchesResponse {
     pub summary: AggregateData,
     pub matches: Vec<MatchResponse>,
-    pub ai_comment: Option<String>,
 }
-impl From<CachedResult> for FullResponse {
+impl From<CachedResult> for MatchesResponse {
     fn from(cached: CachedResult) -> Self {
         Self {
             summary: AggregateData {
@@ -91,13 +90,12 @@ impl From<CachedResult> for FullResponse {
                 edge_ratio: cached.edge_ratio as f32,
             },
             matches: cached.matches.into_iter().map(MatchResponse::from).collect(),
-            ai_comment: None,
         }
     }
 }
 
 
-#[derive(Debug,Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct MatchResponse {
     pub date: String,
     pub time: String,
@@ -120,7 +118,7 @@ impl From<HistoricalMatch> for MatchResponse {
     }
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Clone, Copy)]
 pub struct AggregateData {
     pub avg_up: f32,
     pub avg_down: f32,
@@ -134,6 +132,7 @@ pub struct AppState {
     pub cache: Arc<crate::cache::RetroVisCache>,
     pub broker: Arc<dyn AiProvider>,
     pub ai_service: Arc<AiAnalysisService>,
+    pub oanda: Arc<crate::oanda::OandaClient>,
 }
 
 #[derive(Debug, Serialize)]
@@ -253,6 +252,24 @@ impl CachedResult {
             ai_analysis: None,
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FullQueryRequest {
+    pub symbol: String,
+    /// Pattern search depth; capped at 24 for this endpoint.
+    pub top_k: usize,
+    /// Unix timestamp (UTC) of the reference candle, aligned with `QueryRequest.timestamp`.
+    pub timestamp: i64,
+    pub timeframe: String,
+}
+
+#[derive(Serialize)]
+pub struct FullResponse {
+    pub summary: AggregateData,
+    pub matches: Vec<MatchResponse>,
+    pub context: MatchesResponse,
+    pub ai_analysis: String,
 }
 
 #[derive(serde::Deserialize)]

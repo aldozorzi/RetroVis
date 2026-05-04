@@ -4,7 +4,7 @@ use axum::{
     Json,
     Router,
     response::{Html, IntoResponse},
-    
+    http::StatusCode,
 };
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -21,8 +21,11 @@ mod cache;
 mod gemini;
 //mod ollama;
 mod ai_analysis;
+mod oanda;
+mod full_search;
 
-use models::{QueryRequest,AppState,FullResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey,AiAnalysisService,AiProvider};
+use models::{QueryRequest,AppState,MatchesResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey,AiAnalysisService,AiProvider,FullQueryRequest,FullResponse};
+use crate::oanda::candle_start_utc_ny_row;
 use gemini::GeminiBroker;
 //use ollama::OllamaBroker;
 use engine::SearchEngine;
@@ -60,6 +63,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cache.clone()
     ));
 
+    let oanda_key = match env::var("OANDA_API_KEY") {
+        Ok(k) => k,
+        Err(_) => return Err("OANDA_API_KEY mancante".into()),
+    };
+    let oanda_url = env::var("OANDA_REST_URL").ok();
+    let oanda = Arc::new(oanda::OandaClient::new(oanda_key, oanda_url));
 
     let shared_state = Arc::new(AppState {
         engines,
@@ -67,10 +76,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cache,
         broker: broker,
         ai_service: ai_service,
+        oanda,
     });
 
     let app = Router::new()
         .route("/search", post(search_handler))
+        .route("/full-search", post(full_search_handler))
         .route("/day-details", get(day_details_handler))
         .route("/visualize", get(visualize_handler))
         .route("/context_matches", post(context_matches_handler))
@@ -93,10 +104,302 @@ async fn shutdown_signal() {
         .expect("Impossibile installare il gestore CTRL+C");
     println!("\nChiusura del server in corso...");
 }
+async fn full_search_handler(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<FullQueryRequest>,
+) -> impl IntoResponse {
+    let tf_sec = cache::RetroVisCache::timeframe_to_seconds(&req.timeframe);
+    let top_k_pattern = req.top_k.min(24);
+    let top_k_ctx = req.top_k.min(10);
+
+    if state.engines.get(&req.symbol).is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "simbolo non disponibile per il motore storico" })),
+        )
+            .into_response();
+    }
+
+    let min_bars = 450usize;
+    let candles = match state
+        .oanda
+        .fetch_candles_for_full_search(&req.symbol, &req.timeframe, req.timestamp, min_bars)
+        .await
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let ref_idx = match full_search::find_reference_index(&candles, req.timestamp, tf_sec) {
+        Ok(i) => i,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let ref_start = match candle_start_utc_ny_row(&candles[ref_idx]) {
+        Ok(t) => t,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let session_hint = match full_search::resolve_auto_session_id(ref_start) {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "nessuna sessione attiva (AUTO) per questo istante" })),
+            )
+                .into_response();
+        }
+    };
+
+    let open_idx = match full_search::find_session_open_index_backward(&candles, ref_idx, session_hint, 200) {
+        Ok(i) => i,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let open_start = match candle_start_utc_ny_row(&candles[open_idx]) {
+        Ok(t) => t,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let effective_session = full_search::effective_session_from_open_bar(open_start);
+    let session_id = effective_session.to_string();
+
+    let pattern = match full_search::pattern_candles_exclusive_ref(&candles, open_idx, ref_idx) {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    if pattern.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "serve almeno una candela dopo l'apertura di sessione" })),
+        )
+            .into_response();
+    }
+
+    let session_open = candles[open_idx].open;
+    let last_pat_start = match candle_start_utc_ny_row(&pattern[pattern.len() - 1]) {
+        Ok(t) => t,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    // Ancoraggio cache come in Quantower: timestamp dell'ultima candela nel pattern (bar open UTC).
+    let search_anchor_ts = last_pat_start.timestamp();
+
+    let mut last_matches_response: Option<MatchesResponse> = None;
+    let timeframe_seconds = tf_sec;
+
+    for i in 1..=pattern.len() {
+        let historical_slice = &pattern[0..i];
+        let current_ts =
+            search_anchor_ts - ((pattern.len() - i) as i64 * timeframe_seconds);
+
+        let cached_res = state.cache.get_or_calculate_candle(
+            req.symbol.clone(),
+            req.timeframe.clone(),
+            session_id.clone(),
+            current_ts,
+            || {
+                let engine = match state.engines.get(&req.symbol) {
+                    Some(e) => e,
+                    None => {
+                        return CachedResult::from_aggregates(
+                            AggregateData {
+                                avg_up: 0.0,
+                                avg_down: 0.0,
+                                avg_eos: 0.0,
+                                edge_ratio: 0.0,
+                            },
+                            vec![],
+                        );
+                    }
+                };
+                let session = match state.sessions.get(&session_id) {
+                    Some(s) => s,
+                    None => {
+                        return CachedResult::from_aggregates(
+                            AggregateData {
+                                avg_up: 0.0,
+                                avg_down: 0.0,
+                                avg_eos: 0.0,
+                                edge_ratio: 0.0,
+                            },
+                            vec![],
+                        );
+                    }
+                };
+
+                let normalized: Vec<NormalizedCandle<f32>> = historical_slice
+                    .iter()
+                    .map(|raw| NormalizedCandle::from_raw(raw, session_open))
+                    .collect();
+
+                let matches = engine.find_matches(&normalized, top_k_pattern, session);
+                let (summary, custom_matches) = calculate_aggregates(&matches, session_open);
+
+                CachedResult::from_aggregates(summary, custom_matches)
+            },
+        );
+
+        last_matches_response = Some(MatchesResponse::from(cached_res));
+    }
+
+    let (summary, matches) = match last_matches_response {
+        Some(m) => (m.summary, m.matches),
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "nessun risultato pattern" })),
+            )
+                .into_response();
+        }
+    };
+
+    let ctx_inputs = match full_search::compute_context_inputs(&candles, open_idx, effective_session) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let ctx_date = ctx_inputs.context_cache_date.clone();
+    let symbol = req.symbol.clone();
+
+    let context_cached = state.cache.get_or_calculate_context(&symbol, &session_id, &ctx_date, || {
+        let Some(engine) = state.engines.get(&req.symbol) else {
+            return CachedResult::from_aggregates(
+                AggregateData {
+                    avg_up: 0.0,
+                    avg_down: 0.0,
+                    avg_eos: 0.0,
+                    edge_ratio: 0.0,
+                },
+                vec![],
+            );
+        };
+        let Some(session) = state.sessions.get(&session_id) else {
+            return CachedResult::from_aggregates(
+                AggregateData {
+                    avg_up: 0.0,
+                    avg_down: 0.0,
+                    avg_eos: 0.0,
+                    edge_ratio: 0.0,
+                },
+                vec![],
+            );
+        };
+
+        let current_context = Context::new(
+            ctx_inputs.session_open,
+            ctx_inputs.prev_close,
+            ctx_inputs.prev_high,
+            ctx_inputs.prev_low,
+            ctx_inputs.intraday_high,
+            ctx_inputs.intraday_low,
+        );
+
+        let matches = engine.find_context_matches(&current_context, top_k_ctx, session);
+        let (summary, custom_matches) = calculate_aggregates(&matches, ctx_inputs.session_open);
+        CachedResult::from_aggregates(summary, custom_matches)
+    });
+
+    let context_response = MatchesResponse::from(context_cached);
+
+    let last_close = pattern[pattern.len() - 1].close as f64;
+    let key = CandleCacheKey {
+        asset: req.symbol.clone(),
+        timeframe: req.timeframe.clone(),
+        session_id: session_id.clone(),
+        timestamp: search_anchor_ts,
+    };
+
+    let full_history = state.cache.get_session_history(
+        &req.symbol,
+        &req.timeframe,
+        &session_id,
+        search_anchor_ts,
+        pattern.len(),
+    );
+
+    let context_res = state
+        .cache
+        .get_context(&req.symbol, &session_id, &ctx_date);
+
+    let ai_data = json!({
+        "symbol": req.symbol,
+        "session_id": session_id,
+        "current_price_action": last_close,
+        "evolution_history": full_history,
+        "context": context_res,
+        "session_open": session_open as f64,
+    });
+
+    let ai_analysis = match state.ai_service.get_analysis(key, ai_data).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("full-search AI: {}", e);
+            String::new()
+        }
+    };
+
+    Json(FullResponse {
+        summary,
+        matches,
+        context: context_response,
+        ai_analysis,
+    })
+    .into_response()
+}
+
 async fn search_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<QueryRequest<f32>>,
-) -> Json<FullResponse> {
+) -> Json<MatchesResponse> {
     /*
     // --- LOG DI DEBUG ---
     println!("--- NUOVA RICHIESTA RICEVUTA ---");
@@ -142,7 +445,7 @@ async fn search_handler(
 
         last_result = Some(cached_res);
     }
-    let response = FullResponse::from(last_result.expect("No candles provided"));
+    let response = MatchesResponse::from(last_result.expect("No candles provided"));
     
     Json(response)
 }
@@ -221,7 +524,7 @@ async fn day_details_handler(
 async fn context_matches_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ContextQueryRequest>,
-) -> Json<FullResponse> {
+) -> Json<MatchesResponse> {
     /*
     println!(">>> /context_matches ricevuto: symbol={}, session={}", req.symbol, req.session_id);
     println!("    session_open={}, prev_close={}, prev_high={}, prev_low={}", req.session_open, req.prev_close, req.prev_high, req.prev_low);
@@ -252,7 +555,7 @@ async fn context_matches_handler(
         }
     );
 
-    Json(FullResponse::from(cached_res))
+    Json(MatchesResponse::from(cached_res))
 }
 
 fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (AggregateData, Vec<MatchResponse>) {

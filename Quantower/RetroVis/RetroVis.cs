@@ -197,7 +197,7 @@ public class RetroVis : Indicator
             if (response.IsSuccessStatusCode)
             {
                 string resJson = await response.Content.ReadAsStringAsync();
-                var fullData = JsonSerializer.Deserialize<FullResponse>(resJson);
+                var fullData = JsonSerializer.Deserialize<MatchesResponse>(resJson);
                 if (fullData == null) return;
                 // Log("Success");
                 candlesResults = fullData.Matches;
@@ -334,7 +334,7 @@ public class RetroVis : Indicator
             {
                 string resJson = await response.Content.ReadAsStringAsync();
 
-                var fullData = JsonSerializer.Deserialize<FullResponse>(resJson);
+                var fullData = JsonSerializer.Deserialize<MatchesResponse>(resJson);
                 if (fullData == null) return;
                 contextResults = fullData.Matches;
                 contextSummary = fullData.Summary;
@@ -846,7 +846,7 @@ public class RetroVis : Indicator
         [JsonPropertyName("_volume")] public float Volume { get; set; }
     }
 
-    public class FullResponse
+    public class MatchesResponse
     {
         [JsonPropertyName("summary")] public AggregateData Summary { get; set; }
         [JsonPropertyName("matches")] public List<MatchResponse> Matches { get; set; }
