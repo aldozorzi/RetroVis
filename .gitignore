@@ -5,3 +5,5 @@
 /.vs
 .env
 retro-vis.exe
+.cursor
+.cursorrules
