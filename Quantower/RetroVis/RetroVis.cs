@@ -72,8 +72,6 @@ public class RetroVis : Indicator
 
     private string currentAnalysisText;
     
-
-    private Font titleFont = new Font("Arial", 10, FontStyle.Bold);
     private Font dataFont = new Font("Consolas", 9);
     private Font btnfont = new Font("Arial", 7, FontStyle.Bold);
     private Font headerFont = new Font("Consolas", 11, FontStyle.Bold);
@@ -110,9 +108,10 @@ public class RetroVis : Indicator
         lastProcessedBarTime = DateTime.MinValue;
         if (this.CurrentChart != null)
         {
-            this.CurrentChart.MouseClick -= OnChartMouseUp;
-            this.CurrentChart.MouseClick += OnChartMouseUp;
-            this.CurrentChart.MouseClick -= OnChartMouseDown;
+            this.CurrentChart.MouseUp -= OnChartMouseUp;
+            this.CurrentChart.MouseUp += OnChartMouseUp;
+
+            this.CurrentChart.MouseDown -= OnChartMouseDown;
             this.CurrentChart.MouseDown += OnChartMouseDown;
         }
             
@@ -393,11 +392,11 @@ public class RetroVis : Indicator
             currentAnalysisText = null;
 
         }
-        gr.DrawString(dynamicTitle, titleFont, Brushes.White, tx, ty);
-        float titleWidth = gr.MeasureString(dynamicTitle, titleFont).Width;
+        gr.DrawString(dynamicTitle, headerFont, Brushes.Orange, tx, ty);
+        float titleWidth = gr.MeasureString(dynamicTitle, headerFont).Width;
         if (candlesResults.Count > 0)
         {
-            gr.DrawString(deltaText, titleFont, deltaBrush,2+ titleWidth, ty);
+            gr.DrawString(deltaText, headerFont, deltaBrush,2+ titleWidth, ty);
         }
         if (effectiveSession == null)
         {
@@ -405,14 +404,14 @@ public class RetroVis : Indicator
             return;
         }
         ty += 32;
-        gr.DrawString("CANDLE MATCHES", titleFont, Brushes.White, tx, ty);
+        gr.DrawString("CANDLE MATCHES", headerFont, Brushes.Orange, tx, ty);
         ty += 18;
         
 
         if ( this.currentCandleCount < this.MinCandles)
         {
             currentAnalysisText = null;
-            gr.DrawString($"WAITING FOR {(this.MinCandles > 1 ? this.MinCandles : "FIRST")} CLOSED CANDLE{(this.MinCandles > 1 ? "S" : "")} ", titleFont, Brushes.Gray, tx, ty+5);
+            gr.DrawString($"WAITING FOR {(this.MinCandles > 1 ? this.MinCandles : "FIRST")} CLOSED CANDLE{(this.MinCandles > 1 ? "S" : "")} ", dataFont, Brushes.Gray, tx, ty+5);
             lastPanelHeight = ty - panelRect.Y + 30;
             ty += 18;
             //return;
@@ -420,7 +419,7 @@ public class RetroVis : Indicator
         else if (candlesResults == null || candlesResults.Count == 0)
         {
             if (currentAnalysisText != "Loading new Analysis...") currentAnalysisText = null;
-            gr.DrawString("WAITING FOR DATA...", titleFont, Brushes.Gray, tx, ty+5);
+            gr.DrawString("WAITING FOR DATA...", dataFont, Brushes.Gray, tx, ty+5);
             lastPanelHeight = ty - panelRect.Y + 30;
             ty += 18;
             //return;
@@ -462,7 +461,7 @@ public class RetroVis : Indicator
         if (contextResults != null && contextResults.Count > 0)
         {
              ty += 10;
-            gr.DrawString("CONTEXT MATCHES", titleFont, Brushes.White, tx, ty);
+            gr.DrawString("CONTEXT MATCHES", headerFont, Brushes.Orange, tx, ty);
             ty += 18;
 
             Brush ctxEdgeBrush = Brushes.White;
@@ -751,8 +750,8 @@ public class RetroVis : Indicator
 
     protected override void OnClear()
     {
-        this.CurrentChart.MouseClick -= OnChartMouseUp;
-        this.CurrentChart.MouseClick -= OnChartMouseDown;
+        this.CurrentChart.MouseUp -= OnChartMouseUp;
+        this.CurrentChart.MouseDown -= OnChartMouseDown;
     }
 
     protected void initTicker(bool useMicro = true)
