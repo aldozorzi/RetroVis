@@ -58,6 +58,16 @@ fn utc_from_ny_hm(date: NaiveDate, h: u32, m: u32) -> Option<DateTime<Utc>> {
     }
 }
 
+pub fn ny_local_epoch_to_utc(ny_local_ts: i64) -> Option<DateTime<Utc>> {
+
+    let naive = DateTime::from_timestamp(ny_local_ts, 0)?.naive_utc();
+    match New_York.from_local_datetime(&naive) {
+        chrono::LocalResult::Single(dt) => Some(dt.with_timezone(&Utc)),
+        chrono::LocalResult::Ambiguous(dt, _) => Some(dt.with_timezone(&Utc)),
+        chrono::LocalResult::None => None,
+    }
+}
+
 /// Indice della candela che contiene `reference_ts` (UTC), oppure l'ultima con inizio <= ts.
 pub fn find_reference_index(
     candles: &[RawCandle<f32>],

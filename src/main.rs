@@ -24,7 +24,7 @@ mod ai_analysis;
 mod oanda;
 mod full_search;
 
-use models::{QueryRequest,AppState,MatchesResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey,AiAnalysisService,AiProvider,FullQueryRequest,FullResponse};
+use models::{QueryRequest,AppState,MatchesResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey,AiAnalysisService,AiProvider,FullQueryRequest,FullResponse, RawCandle};
 use crate::oanda::candle_start_utc_ny_row;
 use gemini::GeminiBroker;
 //use ollama::OllamaBroker;
@@ -111,6 +111,15 @@ async fn full_search_handler(
     let tf_sec = cache::RetroVisCache::timeframe_to_seconds(&req.timeframe);
     let top_k_pattern = req.top_k.min(24);
     let top_k_ctx = req.top_k.min(10);
+    let utc_ts = match full_search::ny_local_epoch_to_utc(req.timestamp) {
+        Some(dt) => dt.timestamp(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "timestamp NY non valido o inesistente (transizione DST)" })),
+            ).into_response();
+        }
+    };
 
     if state.engines.get(&req.symbol).is_none() {
         return (
@@ -123,7 +132,7 @@ async fn full_search_handler(
     let min_bars = 450usize;
     let candles = match state
         .oanda
-        .fetch_candles_for_full_search(&req.symbol, &req.timeframe, req.timestamp, min_bars)
+        .fetch_candles_for_full_search(&req.symbol, &req.timeframe, utc_ts, min_bars)
         .await
     {
         Ok(c) => c,
@@ -136,7 +145,15 @@ async fn full_search_handler(
         }
     };
 
-    let ref_idx = match full_search::find_reference_index(&candles, req.timestamp, tf_sec) {
+    let candles: Vec<RawCandle<f32>> = candles.into_iter().map(|mut c| {
+        c.open  = (c.open  * 4.0).round() / 4.0;
+        c.high  = (c.high  * 4.0).round() / 4.0;
+        c.low   = (c.low   * 4.0).round() / 4.0;
+        c.close = (c.close * 4.0).round() / 4.0;
+        c
+    }).collect();
+
+    let ref_idx = match full_search::find_reference_index(&candles, utc_ts, tf_sec) {
         Ok(i) => i,
         Err(e) => {
             return (
@@ -194,7 +211,13 @@ async fn full_search_handler(
     let effective_session = full_search::effective_session_from_open_bar(open_start);
     let session_id = effective_session.to_string();
 
-    let pattern = match full_search::pattern_candles_exclusive_ref(&candles, open_idx, ref_idx) {
+    let pattern_end_idx = if ref_start.timestamp() == utc_ts {
+        (ref_idx + 1).min(candles.len())
+    } else {
+        ref_idx
+    };
+
+    let pattern = match full_search::pattern_candles_exclusive_ref(&candles, open_idx, pattern_end_idx) {
         Ok(p) => p,
         Err(e) => {
             return (
@@ -204,7 +227,19 @@ async fn full_search_handler(
                 .into_response();
         }
     };
-
+    /*
+    // DEBUG CANDELE SESSIONE PATTERN
+    for (i, c) in pattern.iter().enumerate() {
+        if let Ok(t) = candle_start_utc_ny_row(c) {
+            println!("[pattern {:>3}] UTC={} O={:.2} H={:.2} L={:.2} C={:.2}",
+                i, t.format("%Y-%m-%d %H:%M"), c.open, c.high, c.low, c.close);
+        }
+    }
+    println!("pattern len={}",
+        pattern.len());
+    // FINE DEBUG CANDELE SESSIONE PATTERN
+    // --------------------------------
+    */
     if pattern.is_empty() {
         return (
             StatusCode::BAD_REQUEST,

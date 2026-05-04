@@ -189,7 +189,8 @@ public class RetroVis : Indicator
             };
             
             string json = JsonSerializer.Serialize(request);
-            //Log("json:" + json);
+            // Log("request timestamp:" + finalTimestamp);
+            // Log("request json:" + json);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
             var response = await httpClient.PostAsync(SearchUrl, content);
             //Log(response.ToString());
