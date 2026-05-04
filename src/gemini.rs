@@ -3,6 +3,9 @@ use serde_json::{json, Value};
 use reqwest::Client;
 use crate::models::AiProvider;
 
+use std::time::Duration;
+use tokio::time::timeout;
+
 pub struct GeminiBroker {
     api_key: String,
     http_client: Client,
@@ -22,6 +25,9 @@ impl GeminiBroker {
         let history = &session_data["evolution_history"];
         let context = &session_data["context"];
         let current_price_action = session_data["current_price_action"].as_f64().unwrap_or(0.0);
+        let session_open = session_data["session_open"].as_f64().unwrap_or(0.0);
+
+        //println!("session_open:{}", session_open);
 
         let mut report = format!("### QUANTITATIVE STATISTICAL ANALYSIS - SYMBOL: {}\n", symbol);
         report.push_str(&format!("SESSION: {}\n\n", session));
@@ -38,6 +44,7 @@ impl GeminiBroker {
 
                 report.push_str("--- MANDATORY CURRENT DATA POINTS ---\n");
                 report.push_str(&format!("IDENTIFIED_CURRENT_NOW: {:.2}\n", current_price_action));
+                report.push_str(&format!("IDENTIFIED_CURRENT_MOVE: {:.2}\n", current_price_action - session_open));
                 report.push_str(&format!("IDENTIFIED_CURRENT_EDGE: {:.2}\n", current_signed_edge));
                 report.push_str(&format!("IDENTIFIED_CURRENT_EOS: {:.2}\n", current_eos));
                 report.push_str(&format!("CURRENT_VOLATILITY_RATIO: {:.1}/{:.1}\n\n", avg_up, -avg_down));
@@ -112,45 +119,58 @@ impl AiProvider for GeminiBroker {
         );
 
         let symbol = data["symbol"].as_str().unwrap_or("N/A");
+        let report = Self::format_trading_report(&data);
         let payload = json!({
             "systemInstruction": { "parts": { "text": self.system_prompt() } },
-            "contents": { "parts": { "text": Self::format_trading_report(&data) } },
+            "contents": { "parts": { "text": report } },
             "generationConfig": { "temperature": 0.5 }
         });
-
+        //println!("Report {:#?}", report);
         let backoffs = [500, 1000, 3000];
         
         for (attempt, delay) in backoffs.iter().enumerate() {
             println!("REQ | Symbol: {} | Attempt: {}", symbol, attempt + 1);
 
-            let resp = self.http_client.post(&url)
-                .json(&payload)
-                .send()
-                .await;
+            let request_timeout = Duration::from_secs(15);
+
+            let resp = timeout(
+                request_timeout, 
+                self.http_client.post(&url).json(&payload).send()
+            ).await;
 
             match resp {
-                Ok(r) => {
-                    let status = r.status();
-                    if status.is_success() {
-                        let json = r.json::<Value>().await.map_err(|e| format!("JSON_PARSE_ERR: {}", e))?;
-                        return json["candidates"][0]["content"]["parts"][0]["text"]
-                            .as_str()
-                            .map(|s| s.to_string())
-                            .ok_or_else(|| format!("MALFORMED_RESPONSE: {}", json));
-                    }
+                // 1. Il timeout NON è scattato, abbiamo un risultato dalla richiesta HTTP
+                Ok(http_result) => {
+                    match http_result {
+                        Ok(r) => { // Abbiamo una Response valida
+                            let status = r.status();
+                            if status.is_success() {
+                                let json = r.json::<Value>().await.map_err(|e| format!("JSON_PARSE_ERR: {}", e))?;
+                                return json["candidates"][0]["content"]["parts"][0]["text"]
+                                    .as_str()
+                                    .map(|s| s.to_string())
+                                    .ok_or_else(|| format!("MALFORMED_RESPONSE: {}", json));
+                            }
 
-                    if status.as_u16() == 503 || status.as_u16() == 429 {
-                        println!("RETRY | Symbol: {} | Status: {} | Delay: {}ms", symbol, status, delay);
-                        tokio::time::sleep(std::time::Duration::from_millis(*delay)).await;
-                        continue;
+                            if status.as_u16() == 503 || status.as_u16() == 429 {
+                                println!("RETRY | Symbol: {} | Status: {} | Delay: {}ms", symbol, status, delay);
+                                tokio::time::sleep(Duration::from_millis(*delay)).await;
+                                continue;
+                            }
+                            return Err(format!("API_ERROR | Status: {}", status));
+                        }
+                        Err(e) => { // Errore di rete (es. DNS, connessione rifiutata)
+                            println!("NET_ERROR | Symbol: {} | Error: {}", symbol, e);
+                            if attempt == backoffs.len() - 1 { return Err(e.to_string()); }
+                            tokio::time::sleep(Duration::from_millis(*delay)).await;
+                        }
                     }
-
-                    return Err(format!("API_ERROR | Status: {} | Body: {:?}", status, r.text().await));
                 }
-                Err(e) => {
-                    println!("NET_ERROR | Symbol: {} | Error: {}", symbol, e);
-                    if attempt == backoffs.len() - 1 { return Err(e.to_string()); }
-                    tokio::time::sleep(std::time::Duration::from_millis(*delay)).await;
+                // 2. Il timeout È scattato (Elapsed)
+                Err(_) => {
+                    println!("TIMEOUT | Symbol: {} | No response after {:?}ms", symbol, request_timeout);
+                    if attempt == backoffs.len() - 1 { return Err("TIMEOUT_FINAL_FAIL".into()); }
+                    tokio::time::sleep(Duration::from_millis(*delay)).await;
                 }
             }
         }

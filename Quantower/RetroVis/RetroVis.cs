@@ -22,7 +22,7 @@ public class RetroVis : Indicator
     public string SessionId = "AUTO";
 
     [InputParameter("Min Candles for Pattern", 1, 1, 15, 1)]
-    public int MinCandles = 2;
+    public int MinCandles = 1;
 
     [InputParameter("Max Candles for Pattern", 2, 1, 20, 1)]
     public int MaxCandles = 12;
@@ -91,7 +91,6 @@ public class RetroVis : Indicator
         Name = "RetroVis";
         SeparateWindow = false;
     }
-
     protected override void OnInit()
     {
         httpClient.Timeout = TimeSpan.FromSeconds(30);
@@ -227,6 +226,7 @@ public class RetroVis : Indicator
                 Timeframe = GetFormattedTimeframe(),
                 Timestamp = finalTimestamp,
                 CurrentPriceAction = lastCandle.Close,
+                SessionOpen = (float)currentPriceBase,
             };
             //Log("CurrentPriceAction: " + request.CurrentPriceAction);
             string json = JsonSerializer.Serialize(request);
@@ -555,17 +555,20 @@ public class RetroVis : Indicator
     private void OnChartMouseDown(object sender, ChartMouseNativeEventArgs e)
     {
         chartMouseDownReceived = true;
-        //Log("OnChartMouseDown - setting chartMouseDownReceived: " + chartMouseDownReceived);
+        Log("OnChartMouseDown - setting chartMouseDownReceived: " + chartMouseDownReceived);
     }
     private void OnChartMouseUp(object sender, ChartMouseNativeEventArgs e)
     {
-        //Log("OnChartMouseUp - reading chartMouseDownReceived: " + chartMouseDownReceived);
+        Log("OnChartMouseUp - reading chartMouseDownReceived: " + chartMouseDownReceived);
+        Log("OnChartMouseUp - checking chartMouseDownReceived: ");
         if (!chartMouseDownReceived) return;  // click orfano, ignoralo
+        Log("OnChartMouseUp - checking checked ");
         chartMouseDownReceived = false;
 
         if (toggleRect.Contains(e.Location))
         {
             isPanelVisible = !isPanelVisible;
+            Log("OnChartMouseUp - Target: toggleRect");
             return;
         }
 
@@ -573,6 +576,7 @@ public class RetroVis : Indicator
         {
             isBacktestMode = !isBacktestMode;
             if (!isBacktestMode) lastProcessedBarTime = default; // Reset per tornare in real-time
+            Log("OnChartMouseUp - Target: backtestBtnRect");
             return;
         }
 
@@ -592,6 +596,7 @@ public class RetroVis : Indicator
                             FileName = url,
                             UseShellExecute = true
                         });
+                        Log("OnChartMouseUp - Target: Candle match");
                         return;
                     }
                     catch (Exception ex)
@@ -608,7 +613,11 @@ public class RetroVis : Indicator
                 {
                     string date = contextDates[i];
                     string url = $"http://127.0.0.1:9999/visualize?symbol={ticker}&date={date}";
-                    try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = url, UseShellExecute = true }); return; }
+                    try { 
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = url, UseShellExecute = true });
+                        Log("OnChartMouseUp - Target: Context match");
+                        return; 
+                    }
                     catch (Exception ex) { Log("Errore apertura browser: " + ex.Message); }
                     break;
                 }
@@ -618,6 +627,7 @@ public class RetroVis : Indicator
 
         if (isBacktestMode)
         {
+            Log("OnChartMouseUp - Target: Backtest");
             DateTime clickTime = e.Window.CoordinatesConverter.GetTime(e.X);
             int candleIndex = GetIndexByTime(clickTime);
             RunManualAnalysis(candleIndex);
@@ -741,7 +751,8 @@ public class RetroVis : Indicator
 
     protected override void OnClear()
     {
-       
+        this.CurrentChart.MouseClick -= OnChartMouseUp;
+        this.CurrentChart.MouseClick -= OnChartMouseDown;
     }
 
     protected void initTicker(bool useMicro = true)
@@ -821,6 +832,7 @@ public class RetroVis : Indicator
         [JsonPropertyName("timestamp")] public long Timestamp { get; set; }
         [JsonPropertyName("timeframe")] public string Timeframe { get; set; }
         [JsonPropertyName("current_price_action")] public float CurrentPriceAction { get; set; }
+        [JsonPropertyName("session_open")] public float SessionOpen { get; set; }
     }
 
     public class RawCandle

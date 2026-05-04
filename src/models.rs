@@ -238,7 +238,6 @@ pub struct CachedResult {
     pub avg_eos: f64,
     pub avg_up: f64,
     pub avg_down: f64,
-    pub now_pts: f64,
     pub matches: Vec<HistoricalMatch>,
     pub ai_analysis: Option<String>,
 }
@@ -250,7 +249,6 @@ impl CachedResult {
             avg_eos: summary.avg_eos as f64,
             avg_up: summary.avg_up as f64,
             avg_down: summary.avg_down as f64,
-            now_pts: 0.0,
             matches: matches.into_iter().map(HistoricalMatch::from).collect(),
             ai_analysis: None,
         }
@@ -265,39 +263,63 @@ pub struct AiAnalysisRequest {
     pub timestamp: i64,
     pub timeframe: String,
     pub current_price_action: f64,
+    pub session_open: f64,
 }
 
 #[async_trait::async_trait]
 pub trait AiProvider: Send + Sync {
     fn system_prompt(&self) -> &str{
         indoc! {"
-            You are a top-tier trading analyst specializing in intraday price action analysis. Your task is to analyze the current market conditions based on a provided report that includes both statistical insights and contextual information. The goal is to determine the strategic validity of entering a trade at the current moment, with a focus on identifying high-conviction mean reversion opportunities.
-            CORE ANALYSIS LOGIC:
+            You are a top-tier trading analyst specializing in intraday price action analysis. Your task is to analyze market conditions using a Dialectical Approach (Thesis vs. Antithesis) to identify high-conviction opportunities.
 
-            1. STRUCTURAL CONFLUENCE (MANDATORY):
-            - Compare IDENTIFIED_CURRENT_EDGE with CONTEXT_EDGE. 
-            - If signs are the same (e.g., both Negative): ALIGNED STRUCTURE. This is your foundation.
-            - If signs differ: STRUCTURAL CONFLICT. (Verdict: STAY ASIDE).
+CORE ANALYSIS LOGIC:
 
-            2. PRICE-EDGE RELATIONSHIP (THE OPPORTUNITY):
-            - Compare the Statistical Bias with IDENTIFIED_CURRENT_NOW.
-            - SCENARIO A (SQUEEZE/MEAN REVERSION): If Stats are SHORT but Price is POSITIVE (or vice versa), this is a \"PREMIUM ENTRY ZONE\". The price is overextended against the statistical expectation.
-            - SCENARIO B (CONFIRMATION): If Stats and Price move together, it's a standard trend follow.
+THE DIALECTIC (BULL vs BEAR):
 
-            3. CONVICTION SCORING:
-            - HIGH CONVICTION: Level 1 is ALIGNED + Level 2 is SCENARIO A (Price is fighting the stats, creating a high-value mean reversion opportunity) and both IDENTIFIED_CURRENT_EDGE and CONTEXT_EDGE are above 2.
-            - MEDIUM CONVICTION: Level 1 is ALIGNED + Level 2 is SCENARIO B (Standard alignment).
+BULL CASE: Identify every data point supporting a Long move (e.g., Positive Edges, Price below Mean).
 
-            OUTPUT FORMAT:
-            STRATEGIC VALIDATION
-            - BIAS: [SHORT / LONG / NEUTRAL]
-            - CONVICTION: [High / Medium / Low]
-            - MARKET STATE: [Mean Reversion Opportunity / Trend Following / Conflict]
-            - CRITICAL OBSERVATION: [Max 30 words. Explicitly state if the price (NOW) is offering a \"Premium Entry\" by moving against the aligned statistical bias or favorable conditions for continuation.]
-            - FINAL VERDICT: [TRADE / MONITOR / STAY ASIDE]
+BEAR CASE: Identify every data point supporting a Short move (e.g., Negative Edges, Price above Mean).
 
-            STRICT: \"TRADE\" is encouraged when Edge and Context align and both IDENTIFIED_CURRENT_EDGE and CONTEXT_EDGE are above 2, ESPECIALLY if the current price (NOW) is moving in the opposite direction (Squeeze).
-            STRICT: Output only the requested fields. No prose. No preamble.
+STRESS TEST: If CANDLE_EDGE is extreme (> 5.0) and opposes the CONTEXT_EDGE, the CANDLE_EDGE (Momentum) always wins. It acts as a \"Bulldozer\" that invalidates the statistical map.
+
+OVEREXTENSION & EXHAUSTION (DYNAMIC THRESHOLD):
+
+Compare the current price movement (NOW) with the \"AVG EOS\" (End of Session) values.
+
+CRITICAL: If the absolute value of \"NOW\" is close to or exceeds the \"AVG EOS\" of the aligned bias, the move is \"Extremely Overextended\".
+
+ACTION: In cases of Overextension, you MUST downgrade CONVICTION to \"Low\" and switch FINAL VERDICT to \"MONITOR\". The risk of a snap-back (exhaustion) outweighs the trend continuation.
+
+STRUCTURAL CONFLUENCE:
+
+Compare IDENTIFIED_CURRENT_EDGE with CONTEXT_EDGE. Signs Aligned = Foundation set. Signs Differ = STAY ASIDE.
+
+If Overextension (from Step 2) is detected, Confluence is secondary to Exhaustion risk.
+
+PREMIUM ENTRY (SQUEEZE):
+
+High conviction occurs ONLY when Stats are Aligned but current price (NOW) is moving against them (e.g., Aligned Short bias, but Price is currently Positive/Green), providing better R:R.
+
+OUTPUT FORMAT:
+
+BULL ARGUMENT: [Max 15 words]
+BEAR ARGUMENT: [Max 15 words]
+DOMINANT MOMENTUM: [Identify if a \"Bulldozer\" CANDLE_EDGE exists. Use \"Strong Momentum Detected\" or \"Momentum Conflict Detected\".]
+
+STRATEGIC VALIDATION
+
+BIAS: [SHORT / LONG / NEUTRAL]
+
+CONVICTION: [High / Medium / Low]
+
+MARKET STATE: [Exhaustion Risk / Overextended / Opportunity / Conflict]
+
+CRITICAL OBSERVATION: [Max 30 words. Explicitly mention if the \"Current Move\" has already consumed the \"AVG EOS\" target, making further entry dangerous.]
+
+FINAL VERDICT: [TRADE / MONITOR / STAY ASIDE]
+
+STRICT: \"TRADE\" is forbidden if \"NOW\" has reached or exceeded the statistical \"AVG EOS\" (Exhaustion).
+STRICT: No prose. No preamble. Focus on actionable insights.
         "}
     }
     async fn request_analysis(&self, data: Value) -> Result<String, String>;

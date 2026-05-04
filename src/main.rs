@@ -183,6 +183,7 @@ pub async fn ai_analysis_handler(
         "current_price_action": req.current_price_action,
         "evolution_history": full_history,
         "context": context_res,
+        "session_open": req.session_open,
     });
 
     // Delegate the analysis to the AiAnalysisService, which will handle caching, coalescing and provider calls internally.
