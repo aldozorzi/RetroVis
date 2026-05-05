@@ -260,8 +260,8 @@ public class RetroVis : Indicator
             }
             else if (effectiveSession == "LONDON_OPEN")
             {
-                closeHour = 17;
-                closeMinute = 0;
+                closeHour = 14;
+                closeMinute = 25;
                 sessionTz = LondonTz;
             }
             else
@@ -374,7 +374,7 @@ public class RetroVis : Indicator
         int tx = panelRect.X + 12, ty = panelRect.Y + 12;
 
         string deltaSign = currentDelta >= 0 ? "+" : "";
-        string deltaText = $" | NOW: {deltaSign}{currentDelta:F1}";
+        string deltaText = $" NOW: {deltaSign}{currentDelta:F1}";
         Brush deltaBrush = currentDelta >= 0 ? Brushes.LimeGreen : Brushes.Red;
 
         
@@ -397,7 +397,7 @@ public class RetroVis : Indicator
         float titleWidth = gr.MeasureString(dynamicTitle, headerFont).Width;
         if (candlesResults.Count > 0)
         {
-            gr.DrawString(deltaText, headerFont, deltaBrush,2+ titleWidth, ty);
+            gr.DrawString(deltaText, headerFont, deltaBrush,30+ titleWidth, ty);
         }
         if (effectiveSession == null)
         {
@@ -657,7 +657,7 @@ public class RetroVis : Indicator
             int londonTime = londonNow.Hour * 100 + londonNow.Minute;
             int nyTime = nyNow.Hour * 100 + nyNow.Minute;
 
-            if (londonTime >= 800 && londonTime < 1700 && nyTime < 930) sessionToUse = "LONDON_OPEN";
+            if (londonTime >= 800 && londonTime < 1425 && nyTime < 930) sessionToUse = "LONDON_OPEN";
             else if (nyTime >= 930 && nyTime < 1600) sessionToUse = "NY_OPEN";
             else sessionToUse = null;
         }
