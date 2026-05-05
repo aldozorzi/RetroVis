@@ -72,6 +72,7 @@ pub struct MatchOutcome {
     pub eod_ret_pct: f32,
     pub mfe_pct: f32,
     pub mae_pct: f32,
+    pub eoh_pct: f32,
 }
 
 #[derive(serde::Serialize)]
@@ -87,6 +88,7 @@ impl From<CachedResult> for MatchesResponse {
                 avg_down: cached.avg_down as f32,
                 avg_eos: cached.avg_eos as f32,
                 edge_ratio: cached.edge_ratio as f32,
+                avg_eoh: cached.avg_eoh as f32,
             },
             matches: cached.matches.into_iter().map(MatchResponse::from).collect(),
         }
@@ -102,6 +104,7 @@ pub struct MatchResponse {
     pub eos_pts: f32,
     pub up_pts: f32,
     pub down_pts: f32,
+    pub eoh_pts: f32,
 }
 
 impl From<HistoricalMatch> for MatchResponse {
@@ -113,6 +116,7 @@ impl From<HistoricalMatch> for MatchResponse {
             up_pts: m.up as f32,
             down_pts: m.down as f32,
             eos_pts: m.eos as f32,
+            eoh_pts: m.eoh as f32,
         }
     }
 }
@@ -123,6 +127,7 @@ pub struct AggregateData {
     pub avg_down: f32,
     pub avg_eos: f32,
     pub edge_ratio: f32,
+    pub avg_eoh: f32,
 }
 
 pub struct AppState {
@@ -216,6 +221,7 @@ pub struct HistoricalMatch {
     pub up: f64,           
     pub down: f64,        
     pub eos: f64,        
+    pub eoh: f64,        
 }
 
 impl From<MatchResponse> for HistoricalMatch {
@@ -226,6 +232,7 @@ impl From<MatchResponse> for HistoricalMatch {
             up: m.up_pts as f64,
             down: m.down_pts as f64,
             eos: m.eos_pts as f64,
+            eoh: m.eoh_pts as f64,
         }
     }
 }
@@ -238,6 +245,7 @@ pub struct CachedResult {
     pub avg_down: f64,
     pub matches: Vec<HistoricalMatch>,
     pub ai_analysis: Option<String>,
+    pub avg_eoh: f64,
 }
 
 impl CachedResult {
@@ -247,6 +255,7 @@ impl CachedResult {
             avg_eos: summary.avg_eos as f64,
             avg_up: summary.avg_up as f64,
             avg_down: summary.avg_down as f64,
+            avg_eoh: summary.avg_eoh as f64,
             matches: matches.into_iter().map(HistoricalMatch::from).collect(),
             ai_analysis: None,
         }

@@ -76,6 +76,14 @@ impl SearchEngine<f32> {
 
                     let dist = Self::calculate_distance(current_pattern, &historical_pattern);
                     
+                    let eoh_time_ny = start_t_ny + chrono::Duration::hours(1);
+                    let eoh_time_str = eoh_time_ny.format("%H:%M:%S").to_string();
+                    let eoh_pct = day.candles[start_idx..]
+                        .iter()
+                        .filter(|c| c.time <= eoh_time_str)
+                        .last()
+                        .map(|c| ((c.close - baseline) / baseline) * 100.0);
+
                     let end_idx = if session.id == "LONDON_OPEN" {
                         day.candles.iter()
                             .position(|c| c.time == "09:25:00")
@@ -102,6 +110,7 @@ impl SearchEngine<f32> {
                         eod_ret_pct: ((last_close - baseline) / baseline) * 100.0,
                         mfe_pct: ((max_high - baseline) / baseline) * 100.0,
                         mae_pct: ((min_low - baseline) / baseline) * 100.0,
+                        eoh_pct: eoh_pct.unwrap_or(0.0),
                     });
                 }
             }
@@ -191,6 +200,15 @@ impl SearchEngine<f32> {
 
             let dist = current_context.distance(&hist_context);
 
+            let eoh_time_ny = start_t_ny + chrono::Duration::hours(1);
+            let eoh_time_str = eoh_time_ny.format("%H:%M:%S").to_string();
+            let baseline = session_open;
+            let eoh_pct = day.candles[start_idx..]
+                .iter()
+                .filter(|c| c.time <= eoh_time_str)
+                .last()
+                .map(|c| ((c.close - baseline) / baseline) * 100.0);
+
             let end_idx = if session.id == "LONDON_OPEN" {
                 day.candles.iter()
                     .position(|c| c.time == "09:25:00")
@@ -217,6 +235,7 @@ impl SearchEngine<f32> {
                 eod_ret_pct: ((last_close - baseline) / baseline) * 100.0,
                 mfe_pct: ((max_high - baseline) / baseline) * 100.0,
                 mae_pct: ((min_low  - baseline) / baseline) * 100.0,
+                eoh_pct: eoh_pct.unwrap_or(0.0),
             });
         }
 

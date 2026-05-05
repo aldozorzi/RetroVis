@@ -94,7 +94,7 @@ public class RetroVis : Indicator
         httpClient.Timeout = TimeSpan.FromSeconds(30);
 
         this.SearchUrl = $"{ServerUrl.TrimEnd('/')}/search";
-        this.ContextUrl = $"{ServerUrl.TrimEnd('/')}/context_matches";
+        this.ContextUrl = $"{ServerUrl.TrimEnd('/')}/context-search";
         try
         {
             NyTz = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
@@ -231,7 +231,7 @@ public class RetroVis : Indicator
             //Log("CurrentPriceAction: " + request.CurrentPriceAction);
             string json = JsonSerializer.Serialize(request);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
-            var response = await httpClient.PostAsync($"{ServerUrl.TrimEnd('/')}/get_ai_analysis", content);
+            var response = await httpClient.PostAsync($"{ServerUrl.TrimEnd('/')}/get-ai-analysis", content);
             if (response.IsSuccessStatusCode)
             {
                 var result = await response.Content.ReadFromJsonAsync<AiResponse>();
@@ -429,14 +429,14 @@ public class RetroVis : Indicator
         {
             Rectangle candleSummaryRect = new Rectangle(tx, ty, panelRect.Width - 24, 45);
             gr.DrawRectangle(Pens.DimGray, candleSummaryRect);
-            string summaryLine1 = $"AVG UP: +{candlesSummary.AvgUp:F1} pts | AVG DOWN: -{candlesSummary.AvgDown:F1} pts";
+            string summaryLine1 = $"UP: +{candlesSummary.AvgUp:F1} | DOWN: -{candlesSummary.AvgDown:F1}";
         
             Brush edgeBrush = Brushes.White;
             if (candlesSummary.EdgeRatio > 2.0)
                 edgeBrush = (candlesSummary.AvgUp > Math.Abs(candlesSummary.AvgDown)) ? Brushes.LimeGreen : Brushes.Red;
             else if (candlesSummary.EdgeRatio > 1.2)
                 edgeBrush = Brushes.Gold;
-            string summaryLine2 = $"EDGE RATIO: {(Math.Abs(candlesSummary.AvgDown) > candlesSummary.AvgUp ? "-" : "+")}{candlesSummary.EdgeRatio:F2} | AVG EOS: {candlesSummary.AvgEos:+0.0;-0.0}";
+            string summaryLine2 = $"EDGE: {(Math.Abs(candlesSummary.AvgDown) > candlesSummary.AvgUp ? "-" : "+")}{candlesSummary.EdgeRatio:F2} | EOS: {candlesSummary.AvgEos:+0.0;-0.0} | EOH:{candlesSummary.AvgEoh:+0.0;-0.0}";
 
             gr.DrawString(summaryLine1, dataFont, Brushes.LightGray, tx + 5, ty + 5);
             gr.DrawString(summaryLine2, dataFont, edgeBrush, tx + 5, ty + 22);
@@ -445,13 +445,16 @@ public class RetroVis : Indicator
 
             foreach (var m in candlesResults)
             {
-                matchClickAreas.Add(new RectangleF(tx, ty, panelRect.Width - 30, 35));
+                matchClickAreas.Add(new RectangleF(tx, ty, panelRect.Width - 30, 50));
                 matchDates.Add(m.Date);
 
                 gr.DrawString($"{m.Date} {m.Time} (MATCH:{m.Similarity:F1}%)", dataFont, Brushes.Gray, tx, ty);
                 ty += 15;
 
-                string vals = $"UP: {m.UpPts:+0.0}  DOWN: {m.DownPts:0.0}  (EOS: {m.EosPts:+0.0;-0.0})";
+                string vals = $"UP: {m.UpPts:+0.0} | DOWN: {m.DownPts:0.0}";
+                gr.DrawString(vals, dataFont, Brushes.White, tx + 10, ty);
+                ty += 15;
+                vals = $"EOS: {m.EosPts:+0.0;-0.0} | EOH: {m.EohPts:+0.0;-0.0}";
                 gr.DrawString(vals, dataFont, Brushes.White, tx + 10, ty);
 
                 ty += 25;
@@ -474,15 +477,15 @@ public class RetroVis : Indicator
             Rectangle ctxSummaryRect = new Rectangle(tx, ty, panelRect.Width - 24, 45);
             gr.DrawRectangle(Pens.DimGray, ctxSummaryRect);
 
-            gr.DrawString($"AVG UP: +{contextSummary.AvgUp:F1} pts | AVG DOWN: -{contextSummary.AvgDown:F1} pts", dataFont, Brushes.LightGray, tx + 5, ty + 5);
-            gr.DrawString($"EDGE RATIO: {(Math.Abs(contextSummary.AvgDown) > contextSummary.AvgUp ? "-" : "+")}{contextSummary.EdgeRatio:F2} | AVG EOS: {contextSummary.AvgEos:+0.0;-0.0}", dataFont, ctxEdgeBrush, tx + 5, ty + 22);
+            gr.DrawString($"UP: +{contextSummary.AvgUp:F1} | DOWN: -{contextSummary.AvgDown:F1}", dataFont, Brushes.LightGray, tx + 5, ty + 5);
+            gr.DrawString($"EDGE: {(Math.Abs(contextSummary.AvgDown) > contextSummary.AvgUp ? "-" : "+")}{contextSummary.EdgeRatio:F2} | EOS: {contextSummary.AvgEos:+0.0;-0.0} | EOH: {contextSummary.AvgEoh:+0.0;-0.0}", dataFont, ctxEdgeBrush, tx + 5, ty + 22);
 
             ty += 55;
 
             foreach (var m in contextResults)
             {
 
-                var ctxRect = new RectangleF(tx, ty, panelRect.Width - 24, 40);
+                var ctxRect = new RectangleF(tx, ty, panelRect.Width - 24, 50);
                 gr.FillRectangle(ctxBgBrush, ctxRect);
                 contextClickAreas.Add(ctxRect);
                 contextDates.Add(m.Date);
@@ -490,8 +493,12 @@ public class RetroVis : Indicator
                 gr.DrawString($"{m.Date} {m.Time} (MATCH:{m.Similarity:F1}%)", dataFont, Brushes.Gray, tx, ty);
                 ty += 15;
 
-                string vals = $"UP: {m.UpPts:+0.0}  DOWN: {m.DownPts:0.0}  (EOS: {m.EosPts:+0.0;-0.0})";
+                string vals = $"UP: {m.UpPts:+0.0}  DOWN: {m.DownPts:0.0}";
                 gr.DrawString(vals, dataFont, Brushes.White, tx + 10, ty);
+                ty += 15;
+                vals = $"EOS: {m.EosPts:+0.0;-0.0} | EOH: {m.EohPts:+0.0;-0.0}";
+                gr.DrawString(vals, dataFont, Brushes.White, tx + 10, ty);
+
                 ty += 25;
             }
             lastPanelHeight = ty - panelRect.Y + 10;
@@ -857,6 +864,9 @@ public class RetroVis : Indicator
         [JsonPropertyName("avg_up")] public float AvgUp { get; set; }
         [JsonPropertyName("avg_down")] public float AvgDown { get; set; }
         [JsonPropertyName("avg_eos")] public float AvgEos { get; set; }
+
+        [JsonPropertyName("avg_eoh")] public float AvgEoh { get; set; }
+
         [JsonPropertyName("edge_ratio")] public float EdgeRatio { get; set; }
     }
 
@@ -864,10 +874,12 @@ public class RetroVis : Indicator
     {
         [JsonPropertyName("date")] public string Date { get; set; }
         [JsonPropertyName("time")] public string Time { get; set; }
-        [JsonPropertyName("similarity")] public float Similarity { get; set; } // Nuovo
-        [JsonPropertyName("up_pts")] public float UpPts { get; set; }           // Nuovo
-        [JsonPropertyName("down_pts")] public float DownPts { get; set; }       // Nuovo
-        [JsonPropertyName("eos_pts")] public float EosPts { get; set; }         // Nuovo
+        [JsonPropertyName("similarity")] public float Similarity { get; set; } 
+        [JsonPropertyName("up_pts")] public float UpPts { get; set; }           
+        [JsonPropertyName("down_pts")] public float DownPts { get; set; }      
+        [JsonPropertyName("eos_pts")] public float EosPts { get; set; }
+
+        [JsonPropertyName("eoh_pts")] public float EohPts { get; set; }
     }
     public class ContextQueryRequest
     {

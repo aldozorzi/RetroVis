@@ -86,8 +86,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/full-search", post(full_search_handler))
         .route("/day-details", get(day_details_handler))
         .route("/visualize", get(visualize_handler))
-        .route("/context_matches", post(context_matches_handler))
-        .route("/get_ai_analysis", post(ai_analysis_handler))
+        .route("/context-search", post(context_matches_handler))
+        .route("/get-ai-analysis", post(ai_analysis_handler))
         .with_state(shared_state);
     println!("Server in ascolto su http://127.0.0.1:9999");
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 9999));
@@ -286,6 +286,7 @@ async fn full_search_handler(
                                 avg_up: 0.0,
                                 avg_down: 0.0,
                                 avg_eos: 0.0,
+                                avg_eoh: 0.0,
                                 edge_ratio: 0.0,
                             },
                             vec![],
@@ -300,6 +301,7 @@ async fn full_search_handler(
                                 avg_up: 0.0,
                                 avg_down: 0.0,
                                 avg_eos: 0.0,
+                                avg_eoh: 0.0,
                                 edge_ratio: 0.0,
                             },
                             vec![],
@@ -354,6 +356,7 @@ async fn full_search_handler(
                     avg_up: 0.0,
                     avg_down: 0.0,
                     avg_eos: 0.0,
+                    avg_eoh: 0.0,
                     edge_ratio: 0.0,
                 },
                 vec![],
@@ -365,6 +368,7 @@ async fn full_search_handler(
                     avg_up: 0.0,
                     avg_down: 0.0,
                     avg_eos: 0.0,
+                    avg_eoh: 0.0,
                     edge_ratio: 0.0,
                 },
                 vec![],
@@ -599,15 +603,22 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
     let mut sum_mfe = 0.0;
     let mut sum_mae = 0.0;
     let mut sum_eos = 0.0;
+    let mut sum_eoh = 0.0f32;
+    let mut count_eoh = 0usize;
 
     let matches: Vec<MatchResponse> = matches.iter().map(|m| {
         let up = (m.mfe_pct / 100.0) * current_price;
         let down = (m.mae_pct / 100.0) * current_price;
         let eos = (m.eod_ret_pct / 100.0) * current_price;
+        let eoh_pts = (m.eoh_pct / 100.0) * current_price;
         
         sum_mfe += up.abs();
         sum_mae += down.abs();
         sum_eos += eos;
+
+
+        sum_eoh += eoh_pts;
+        count_eoh += 1;
 
         MatchResponse {
             date: m.date.clone(),
@@ -616,6 +627,7 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
             up_pts: up,
             down_pts: down,
             eos_pts: eos,
+            eoh_pts: eoh_pts,
         }
     }).collect();
 
@@ -623,15 +635,18 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
     let avg_up = if count > 0.0 { sum_mfe / count } else { 0.0 };
     let avg_down = if count > 0.0 { sum_mae / count } else { 0.0 };
     let avg_eos = if count > 0.0 { sum_eos / count } else { 0.0 };
+    let avg_eoh = if count_eoh > 0 { sum_eoh / count_eoh as f32 } else { 0.0 };
     
     let long_edge = avg_up / (if avg_down == 0.0 { 1.0 } else { avg_down });
     let short_edge = avg_down / (if avg_up == 0.0 { 1.0 } else { avg_up });
+    
 
     (
         AggregateData {
             avg_up,
             avg_down,
             avg_eos,
+            avg_eoh,
             edge_ratio: long_edge.max(short_edge),
         },
         matches
@@ -664,6 +679,9 @@ async fn visualize_handler() -> Html<String> {
         const chart = LightweightCharts.createChart(document.getElementById('chart'), {
             layout: { background: { color: '#131722' }, textColor: '#d1d4dc' },
             grid: { vertLines: { color: '#2b2e3a' }, horzLines: { color: '#2b2e3a' } },
+            crosshair: {
+                mode: LightweightCharts.CrosshairMode.Normal,
+            },
             timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#485c7b' },
             rightPriceScale: { borderColor: '#485c7b' },
             timeScale: {
