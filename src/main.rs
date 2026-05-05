@@ -23,8 +23,10 @@ mod gemini;
 mod ai_analysis;
 mod oanda;
 mod full_search;
+mod ai_provider;
 
-use models::{QueryRequest,AppState,MatchesResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey,AiAnalysisService,AiProvider,FullQueryRequest,FullResponse, RawCandle};
+use models::{QueryRequest,AppState,MatchesResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey,AiAnalysisService,FullQueryRequest,FullResponse, RawCandle};
+use crate::ai_provider::AiProvider;
 use crate::oanda::candle_start_utc_ny_row;
 use gemini::GeminiBroker;
 //use ollama::OllamaBroker;
