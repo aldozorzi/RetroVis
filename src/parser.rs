@@ -2,27 +2,31 @@ use std::error::Error;
 use std::fs::File;
 use csv::ReaderBuilder;
 use crate::models::{RawCandle, HistoricalDay};
+use memmap2::Mmap;
 
 pub fn load_and_process(path: &str, symbol: &str) -> Result<Vec<HistoricalDay<f32>>, Box<dyn Error>> {
     let file = File::open(path)?;
+    let mmap = unsafe { Mmap::map(&file)? };
     let mut reader = ReaderBuilder::new()
         .has_headers(false) 
         .delimiter(b';')    
-        .from_reader(file);
+         .from_reader(&mmap[..]);
 
-    let mut all_days = Vec::new();
-    let mut current_day_candles = Vec::new();
+    let mut all_days = Vec::with_capacity(500); // pre allocation to avoid continuous resizing
+    let mut current_day_candles = Vec::with_capacity(1000);
     let mut current_date = String::new();
 
-    for result in reader.deserialize() {
-        let r: RawCandle<f32> = result?;
+    let mut record = csv::ByteRecord::new();
+    let mut r: RawCandle<f32>;
+
+    while reader.read_byte_record(&mut record)? {
+        r = record.deserialize(None)?;
 
         if !current_date.is_empty() && r.date != current_date {
             all_days.push(HistoricalDay {
                 date: current_date.clone(),
-                candles: current_day_candles.clone(),
+                candles: std::mem::take(&mut current_day_candles), // tale all and clear for next day
             });
-            current_day_candles.clear();
         }
 
         current_date = r.date.clone();
@@ -35,7 +39,7 @@ pub fn load_and_process(path: &str, symbol: &str) -> Result<Vec<HistoricalDay<f3
             candles: current_day_candles,
         });
     }
-
+    
     println!("{} - Caricate {} giornate storiche.", symbol, all_days.len());
     Ok(all_days)
 }

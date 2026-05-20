@@ -25,8 +25,10 @@ impl GeminiBroker {
 #[async_trait]
 impl AiProvider for GeminiBroker {
     async fn request_analysis(&self, data: Value) -> Result<String, String> {
+        let model = "gemini-3-flash-preview";
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key={}",
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+            model,
             self.api_key
         );
 

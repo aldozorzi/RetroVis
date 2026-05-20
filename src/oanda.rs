@@ -28,7 +28,6 @@ pub struct OandaClient {
     api_key: String,
     base_url: String,
     http: reqwest::Client,
-    /// Dedup identical HTTP requests within process lifetime.
     response_cache: Arc<DashMap<String, Vec<RawCandle<f32>>>>,
 }
 
@@ -49,6 +48,7 @@ impl OandaClient {
         match symbol {
             "NQ" => Ok("NAS100_USD"),
             "GC" => Ok("XAU_USD"),
+            "YM" => Ok("US30_USD"),
             _ => Err(OandaError::UnsupportedSymbol(symbol.to_string())),
         }
     }

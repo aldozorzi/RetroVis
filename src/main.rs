@@ -35,6 +35,7 @@ use engine::SearchEngine;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     clear_terminal();
+    println!("----- STARTING RetroVis SERVER -----");
     dotenv().ok();
     let mut engines = HashMap::new();
 
@@ -44,6 +45,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gc_data = parser::load_and_process("data/gc-M5.csv","GC")?;
     engines.insert("GC".to_string(), SearchEngine::new(gc_data));
 
+    
+    let ym_data = parser::load_and_process("data/ym-M5.csv","YM")?;
+    engines.insert("YM".to_string(), SearchEngine::new(ym_data));
+    
+    
     let mut sessions = HashMap::new();
     sessions.insert("LONDON_OPEN".to_string(), models::SessionConfig {
         id: "LONDON_OPEN".to_string(),

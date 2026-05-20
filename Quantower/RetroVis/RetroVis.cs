@@ -41,6 +41,7 @@ public class RetroVis : Indicator
     private List<MatchResponse> candlesResults = new List<MatchResponse>();
     private bool isPanelVisible = true;
     private Rectangle toggleRect = new Rectangle(5, 80, 120, 25);
+    private int openBarIndex = -1;
     private double currentPriceBase = 0;
     private DateTime lastProcessedBarTime;
     
@@ -78,6 +79,9 @@ public class RetroVis : Indicator
     private Font bodyFont = new Font("Consolas", 10);
     private SolidBrush panelBgBrush = new SolidBrush(Color.FromArgb(220, 10, 10, 10));
     private SolidBrush ctxBgBrush = new SolidBrush(Color.FromArgb(0, 180, 100, 30));
+    private Pen upPen = new Pen(Color.LimeGreen, 2);
+    private Pen downPen = new Pen(Color.Sienna, 2);
+
 
     private float aiBoxHeight = 100f;
 
@@ -118,7 +122,7 @@ public class RetroVis : Indicator
 
         
 
-        initTicker(false);
+        initTicker();
         
     }
 
@@ -134,6 +138,7 @@ public class RetroVis : Indicator
     {
         this.lastProcessedBarTime = default(DateTime);
         candlesResults.Clear();
+        contextResults.Clear();
         ResetLists();
         this.currentCandleCount = 0;
         lastContextSessionDate = "";
@@ -152,11 +157,14 @@ public class RetroVis : Indicator
         currentDelta = Close(0) - currentPriceBase;
 
         DateTime currentBarTime = Time();
-        if (currentBarTime == lastProcessedBarTime) return;
-        else
+        if (currentBarTime == lastProcessedBarTime)
         {
-            Reset();
+            currentDelta = Close(0) - currentPriceBase;
+            return;
         }
+
+        Reset();
+
 
         HistoryAggregationTime aggregation = (HistoryAggregationTime)this.HistoricalData.Aggregation;
 
@@ -260,8 +268,8 @@ public class RetroVis : Indicator
             }
             else if (effectiveSession == "LONDON_OPEN")
             {
-                closeHour = 14;
-                closeMinute = 25;
+                closeHour = 17;
+                closeMinute = 0;
                 sessionTz = LondonTz;
             }
             else
@@ -359,15 +367,34 @@ public class RetroVis : Indicator
 
         if (isPanelVisible)
         {
+            DrawLevels(gr);
             DrawResultsPanel(gr);
-            if(EnableAiAnalysis)
+            
+            if (EnableAiAnalysis)
                 DrawAiPanel(gr);
+            
         }
+    }
+
+    private void DrawLevels(Graphics gr)
+    {
+        if(this.currentCandleCount < this.MinCandles) return;
+        var mainWindow = this.CurrentChart.MainWindow;
+        double up = currentPriceBase + candlesSummary.AvgUp;
+        double down = currentPriceBase - candlesSummary.AvgDown;
+        int upYCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartY(up));
+        int downYCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartY(down));
+        int drawBarIndex = Math.Max(0, openBarIndex);
+        int startXCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartX(Time(drawBarIndex)));
+        int rightX = mainWindow.ClientRectangle.Right;
+
+        gr.DrawLine(upPen, startXCoord, upYCoord, rightX, upYCoord);
+        gr.DrawLine(downPen, startXCoord, downYCoord, rightX, downYCoord);
     }
 
     private void DrawResultsPanel(Graphics gr)
     {
-        ResetLists();
+        // ResetLists();
         Rectangle panelRect = new Rectangle(toggleRect.X, toggleRect.Y + 35, 330, lastPanelHeight);
         gr.FillRectangle(panelBgBrush, panelRect);
 
@@ -665,8 +692,8 @@ public class RetroVis : Indicator
             int nyTime = nyNow.Hour * 100 + nyNow.Minute;
 
             if (londonTime >= 800 && londonTime < 1425 && nyTime < 930) sessionToUse = "LONDON_OPEN";
-            else if (nyTime >= 930 && nyTime < 1600) sessionToUse = "NY_OPEN";
-            else sessionToUse = null;
+            else if (nyTime >= 930 && nyTime < 1705) sessionToUse = "NY_OPEN";
+            else sessionToUse = effectiveSession = null;
         }
 
         if (sessionToUse == null) return;
@@ -678,7 +705,7 @@ public class RetroVis : Indicator
 
         // --- RICERCA OPEN BAR ---
         // Cerchiamo l'apertura andando a ritroso partendo da refIndex
-        int openBarIndex = -1;
+        openBarIndex = -1;
         for (int i = refIndex; i < Math.Min(Count, refIndex + 200); i++) // Aumentato a 200 per sicurezza
         {
             DateTime barInSessionTime = TimeZoneInfo.ConvertTimeFromUtc(Time(i).ToUniversalTime(), sessionTz);
@@ -762,32 +789,24 @@ public class RetroVis : Indicator
         this.CurrentChart.MouseDown -= OnChartMouseDown;
     }
 
-    protected void initTicker(bool useMicro = true)
+    protected void initTicker()
     {
         string symbol = this.Symbol.Description.ToLower();
-        if (useMicro && symbol.Contains("nasdaq") && symbol.Contains("micro"))
-        {
-            ticker = "MNQ";
-        }
-        else if (symbol.Contains("nasdaq"))
+        if (symbol.Contains("nasdaq"))
         {
             ticker = "NQ";
-        }
-        else if (useMicro &&symbol.Contains("s&p") && symbol.Contains("micro"))
-        {
-            ticker = "MES";
         }
         else if (symbol.Contains("s&p"))
         {
             ticker = "ES";
         }
-        else if (useMicro && symbol.Contains("gold") && symbol.Contains("micro"))
-        {
-            ticker = "MGC";
-        }
         else if (symbol.Contains("gold"))
         {
             ticker = "GC";
+        }
+        else if (symbol.Contains("dow"))
+        {
+            ticker = "YM";
         }
     }
 

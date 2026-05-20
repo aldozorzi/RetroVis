@@ -24,13 +24,11 @@ pub trait AiProvider: Send + Sync {
                 
                 // Il segno è determinato esclusivamente dal confronto tra spinta Up e Down
                 let current_signed_edge = if avg_up >= avg_down { edge_raw.abs() } else { -edge_raw.abs() };
-                let current_eos = latest["avg_eos"].as_f64().unwrap_or(0.0);
 
                 report.push_str("--- MANDATORY CURRENT DATA POINTS ---\n");
                 report.push_str(&format!("IDENTIFIED_CURRENT_NOW: {:.2}\n", current_price_action));
                 report.push_str(&format!("IDENTIFIED_CURRENT_MOVE: {:.2}\n", current_price_action - session_open));
                 report.push_str(&format!("IDENTIFIED_CURRENT_EDGE: {:.2}\n", current_signed_edge));
-                report.push_str(&format!("IDENTIFIED_CURRENT_EOS: {:.2}\n", current_eos));
                 report.push_str(&format!("CURRENT_VOLATILITY_RATIO: {:.1}/{:.1}\n\n", avg_up, -avg_down));
             }
 
@@ -42,9 +40,8 @@ pub trait AiProvider: Send + Sync {
                 let signed = if up >= down { edge_raw.abs() } else { -edge_raw.abs() };
                 
                 report.push_str(&format!(
-                    "- Edge Ratio: {:.2} | Avg EOS: {:.2} | Up/Down: {:.1}/{:.1}\n",
+                    "- Edge Ratio: {:.2} | Up/Down: {:.1}/{:.1}\n",
                     signed,
-                    evo["avg_eos"].as_f64().unwrap_or(0.0),
                     up,
                     -down
                 ));
@@ -55,12 +52,11 @@ pub trait AiProvider: Send + Sync {
                 if let Some(matches) = latest["matches"].as_array() {
                     for m in matches.iter().take(5) {
                         report.push_str(&format!(
-                            "Data: {} | Match: {:.1}% | Up: {:.1} | Down: {:.1} | EOS: {:.1}\n",
+                            "Data: {} | Match: {:.1}% | Up: {:.1} | Down: {:.1}\n",
                             m["date"].as_str().unwrap_or("N/A"),
                             m["match_score"].as_f64().unwrap_or(0.0),
                             m["up"].as_f64().unwrap_or(0.0),
-                            m["down"].as_f64().unwrap_or(0.0),
-                            m["eos"].as_f64().unwrap_or(0.0)
+                            m["down"].as_f64().unwrap_or(0.0)
                         ));
                     }
                 }
@@ -74,15 +70,15 @@ pub trait AiProvider: Send + Sync {
         let signed_c_edge = if c_up >= c_down { c_edge.abs() } else { -c_edge.abs() };
 
         report.push_str(&format!("\nCONTEXT_EDGE: {:.2}", signed_c_edge));
-        report.push_str(&format!("\nCONTEXT_EOS: {:.2}", context["avg_eos"].as_f64().unwrap_or(0.0)));
         
         report.push_str("\n\nTOP CONTEXT MATCHES:");
         if let Some(matches) = context["matches"].as_array() {
             for m in matches.iter().take(3) {
                 report.push_str(&format!(
-                    "\n- Date: {} | EOS: {:.1} | Score: {:.1}%",
+                    "\n- Date: {} | Up: {:.1} | Down: {:.1} | Score: {:.1}%",
                     m["date"].as_str().unwrap_or("N/A"),
-                    m["eos"].as_f64().unwrap_or(0.0),
+                    m["up"].as_f64().unwrap_or(0.0),
+                    m["down"].as_f64().unwrap_or(0.0),
                     m["match_score"].as_f64().unwrap_or(0.0)
                 ));
             }
@@ -105,13 +101,19 @@ BULL CASE: Identify every data point supporting a Long move (e.g., Positive Edge
 
 BEAR CASE: Identify every data point supporting a Short move (e.g., Negative Edges, Price above Mean).
 
-STRESS TEST: If CANDLE_EDGE is extreme (> 5.0) and opposes the CONTEXT_EDGE, the CANDLE_EDGE (Momentum) always wins. It acts as a \"Bulldozer\" that invalidates the statistical map.
+STRESS TEST: If CANDLE_EDGE is extreme (> 5.0) and opposes the CONTEXT_EDGE, the CANDLE_EDGE (Momentum) always wins. It 's a very strong force.
 
 OVEREXTENSION & EXHAUSTION (DYNAMIC THRESHOLD):
 
 Compare the current price movement (NOW) with the \"AVG UP\" and \"AVG DOWN\" and values.
 
-CRITICAL: If the absolute value of \"NOW\" is close to or exceeds the \"AVG UP\" or \"AVG DOWN\" values of the aligned bias, the move is \"Extremely Overextended\".
+CRITICAL: If the absolute value of \"NOW\" is close to or exceeds the \"AVG UP\" or \"AVG DOWN\" values for the aligned bias (\"AVG UP\" for bull, \"AVG DOWN\" for bear), the move is \"Extremely Overextended\". 
+
+CRITICAL: If bullish watch ONLY at \"AVG UP\" as a potential Target. If bearish watch  ONLY at \"AVG DOWN\" as a potential Target. DO NOT mix them up.
+
+CRITICAL: Check \" HISTORICAL MATCH DETAILS\" and \"TOP CONTEXT MATCHES:\" for any outliers: if there are outliers, \"AVG UP\" and \"AVG DOWN\" are less reliable.
+
+Use \"HISTORICAL MATCH DETAILS\" to identify if momentum is straight or if there is uncertainty (e.g., if last match has a bias opposite to the previous one, consider the change).
 
 ACTION: In cases of Overextension, you MUST downgrade CONVICTION to \"Low\" and switch FINAL VERDICT to \"MONITOR\". The risk of a snap-back (exhaustion) outweighs the trend continuation.
 
@@ -125,11 +127,15 @@ PREMIUM ENTRY (SQUEEZE):
 
 High conviction occurs ONLY when Stats are Aligned but current price (NOW) is moving against them (e.g., Aligned Short bias, but Price is currently Positive/Green), providing better R:R.
 
+STRICT: \"TRADE\" is forbidden if \"NOW\" has reached or exceeded the statistical \"AVG UP\" or \"AVG DOWN\" (Exhaustion).
+STRICT: \"TRADE\" is forbidden if CONTEXT_EDGE and IDENTIFIED_CURRENT_EDGE are both under 2 (lack of power for the momentum)
+STRICT: \"TRADE\" is forbidden if sum of CONTEXT_EDGE and IDENTIFIED_CURRENT_EDGE is under 4 (lack of power for the momentum).
+
 OUTPUT FORMAT:
 
 BULL ARGUMENT: [Max 15 words]
 BEAR ARGUMENT: [Max 15 words]
-DOMINANT MOMENTUM: [Identify if a \"Bulldozer\" CANDLE_EDGE exists. Use \"Strong Momentum Detected\" or \"Momentum Conflict Detected\".]
+DOMINANT MOMENTUM: [Identify if a strong force CANDLE_EDGE exists. Use \"Strong Momentum Detected\" or \"Momentum Conflict Detected\".]
 
 STRATEGIC VALIDATION
 
@@ -139,11 +145,11 @@ CONVICTION: [High / Medium / Low]
 
 MARKET STATE: [Exhaustion Risk / Overextended / Opportunity / Conflict]
 
-CRITICAL OBSERVATION: [Max 30 words. Explicitly mention if the \"Current Move\" has already consumed the \"AVG UP\" or \"AVG DOWN\" target, making further entry dangerous.]
+CRITICAL OBSERVATION: [Max 30 words. Do NOT mention sum of edges. Explicitly mention if the \"Current Move\" has already consumed the \"AVG UP\" for bullish or \"AVG DOWN\" for bearish target, making further entry dangerous. Check for momentum power.]
 
 FINAL VERDICT: [TRADE / MONITOR / STAY ASIDE]
 
-STRICT: \"TRADE\" is forbidden if \"NOW\" has reached or exceeded the statistical \"AVG UP\" or \"AVG DOWN\" (Exhaustion).
+
 STRICT: No prose. No preamble. Focus on actionable insights.
         "}
     }

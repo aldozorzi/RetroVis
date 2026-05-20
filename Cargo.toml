@@ -17,3 +17,11 @@ dotenvy = "0.15.7"
 async-trait = "0.1.89"
 indoc = "2.0.7"
 thiserror = "2"
+memmap2 = "0.9.10"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = 'abort'
+
+
