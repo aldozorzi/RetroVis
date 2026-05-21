@@ -62,7 +62,7 @@ impl SearchEngine<f32> {
                 continue;
             };
             let start_t_str = start_t_ny.format("%H:%M:%S").to_string();
-            if let Ok(start_idx) = day.candles.binary_search_by(|c| c.time.as_str().cmp(start_t_str.as_str())) { {
+            if let Ok(start_idx) = day.candles.binary_search_by(|c| c.time.as_str().cmp(start_t_str.as_str())) {
                 if day.candles.len() >= start_idx + len {
                     let baseline = day.candles[start_idx].open;
                     
