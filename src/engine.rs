@@ -61,11 +61,8 @@ impl SearchEngine<f32> {
             let Some(start_t_ny) = Self::get_ny_time_for_session(&day.date, session) else {
                 continue;
             };
-
-            if let Some(start_idx) = day.candles.iter().position(|c| {
-                // Nota: usiamo il formato corretto per il match dell'orario
-                c.time == start_t_ny.format("%H:%M:%S").to_string()
-            }) {
+            let start_t_str = start_t_ny.format("%H:%M:%S").to_string();
+            if let Ok(start_idx) = day.candles.binary_search_by(|c| c.time.as_str().cmp(start_t_str.as_str())) { {
                 if day.candles.len() >= start_idx + len {
                     let baseline = day.candles[start_idx].open;
                     
@@ -162,10 +159,8 @@ impl SearchEngine<f32> {
             let Some(start_t_ny) = Self::get_ny_time_for_session(&day.date, session) else {
                 continue;
             };
-
-            let Some(start_idx) = day.candles.iter().position(|c| {
-                c.time == start_t_ny.format("%H:%M:%S").to_string()
-            }) else {
+            let start_t_str = start_t_ny.format("%H:%M:%S").to_string();
+            let Ok(start_idx) = day.candles.binary_search_by(|c| c.time.as_str().cmp(start_t_str.as_str())) else {
                 continue;
             };
 

@@ -43,3 +43,47 @@ pub fn load_and_process(path: &str, symbol: &str) -> Result<Vec<HistoricalDay<f3
     println!("{} - Caricate {} giornate storiche.", symbol, all_days.len());
     Ok(all_days)
 }
+
+/// Aggrega candele da `source_tf_min` a `target_tf_min`.
+/// `target_tf_min` deve essere multiplo di `source_tf_min`.
+pub fn resample(
+    days: &[HistoricalDay<f32>],
+    source_tf_min: u32,
+    target_tf_min: u32,
+) -> Vec<HistoricalDay<f32>> {
+    assert_eq!(target_tf_min % source_tf_min, 0, "Il target deve essere multiplo del source");
+
+    days.into_iter().map(|day| {
+        let resampled = resample_candles(&day.candles, target_tf_min);
+        HistoricalDay { date: day.date.clone(), candles: resampled }
+    }).collect()
+}
+
+fn resample_candles(candles: &[RawCandle<f32>], target_tf_min: u32) -> Vec<RawCandle<f32>> {
+    candles
+        .chunk_by(|a, b| bar_group(a, target_tf_min) == bar_group(b, target_tf_min))  // raggruppa per slot di orario
+        .filter_map(|group| {
+            // Raggruppa solo gruppi "completi" allineati ai boundary
+            // (puoi rimuovere il check se vuoi includere anche l'ultima candela parziale)
+            let first = group.first()?;
+            let last  = group.last()?;
+            Some(RawCandle {
+                date:  first.date.clone(),
+                time:  first.time.clone(),
+                open:  first.open,
+                high:  group.iter().map(|c| c.high).fold(f32::NEG_INFINITY, f32::max),
+                low:   group.iter().map(|c| c.low).fold(f32::INFINITY, f32::min),
+                close: last.close,
+                _volume: group.iter().map(|c| c._volume).sum(),
+            })
+        })
+        .collect()
+}
+
+fn bar_group(c: &RawCandle<f32>, target_tf_min: u32) -> u32 {
+    let parts: Vec<u32> = c.time.splitn(3, ':')
+        .map(|s| s.parse().unwrap_or(0))
+        .collect();
+    let total_minutes = parts[0] * 60 + parts[1];
+    total_minutes / target_tf_min
+}

@@ -12,6 +12,7 @@ use chrono::NaiveTime;
 use serde_json::json;
 use dotenvy::dotenv;
 use std::env;
+use std::thread;
 use chrono::DateTime;
 
 mod models;
@@ -42,17 +43,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
     let mut engines = HashMap::new();
 
-    let nq_data = parser::load_and_process("data/nq-M5.csv","NQ")?;
-    engines.insert("NQ".to_string(), SearchEngine::new(nq_data));
+    let nq = thread::spawn(|| parser::load_and_process("data/nq-M5.csv", "NQ").map_err(|e| e.to_string()));
+    let gc = thread::spawn(|| parser::load_and_process("data/gc-M5.csv", "GC").map_err(|e| e.to_string()));
+    let ym = thread::spawn(|| parser::load_and_process("data/ym-M5.csv", "YM").map_err(|e| e.to_string()));
 
-    let gc_data = parser::load_and_process("data/gc-M5.csv","GC")?;
-    engines.insert("GC".to_string(), SearchEngine::new(gc_data));
+    let nq_5m = nq.join().unwrap()?;
+    let nq_15m = parser::resample(&nq_5m, 5, 15);
+    engines.insert("NQ:M5".to_string(), SearchEngine::new(nq_5m));
+    engines.insert("NQ:M15".to_string(), SearchEngine::new(nq_15m));
 
-    
-    let ym_data = parser::load_and_process("data/ym-M5.csv","YM")?;
-    engines.insert("YM".to_string(), SearchEngine::new(ym_data));
-    
-    
+    let gc_5m = gc.join().unwrap()?;
+    let gc_15m = parser::resample(&gc_5m, 5, 15);
+    engines.insert("GC:M5".to_string(), SearchEngine::new(gc_5m));  
+    engines.insert("GC:M15".to_string(), SearchEngine::new(gc_15m));
+
+    let ym_5m = ym.join().unwrap()?;
+    let ym_15m = parser::resample(&ym_5m, 5, 15);
+    engines.insert("YM:M5".to_string(), SearchEngine::new(ym_5m));
+    engines.insert("YM:M15".to_string(), SearchEngine::new(ym_15m));
+
     let mut sessions = HashMap::new();
     sessions.insert("LONDON_OPEN".to_string(), models::SessionConfig {
         id: "LONDON_OPEN".to_string(),
@@ -65,7 +74,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         timezone: "America/New_York".to_string(),
     });
 
-    // Passala al broker
     let cache = Arc::new(cache::RetroVisCache::new());
     let broker: Arc<dyn AiProvider> = Arc::new(GeminiBroker::new(env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY")));
     //let broker: Arc<dyn AiProvider> = Arc::new(ClaudeBroker::new(env::var("CLAUDE_API_KEY").expect("CLAUDE_API_KEY")));
@@ -116,6 +124,8 @@ async fn shutdown_signal() {
         .expect("Impossibile installare il gestore CTRL+C");
     println!("\nChiusura del server in corso...");
 }
+
+// MEtodo per ricerca completa con dati interni (oanda) invece che da client
 async fn full_search_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<FullQueryRequest>,
@@ -133,10 +143,11 @@ async fn full_search_handler(
         }
     };
 
-    if state.engines.get(&req.symbol).is_none() {
+    let engine_key = format!("{}:{}", req.symbol, req.timeframe);
+    if state.engines.get(&engine_key).is_none() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "simbolo non disponibile per il motore storico" })),
+            Json(json!({ "error": "simbolo/timeframe non disponibile per il motore storico" })),
         )
             .into_response();
     }
@@ -288,7 +299,8 @@ async fn full_search_handler(
             session_id.clone(),
             current_ts,
             || {
-                let engine = match state.engines.get(&req.symbol) {
+                let engine_key = format!("{}:{}", req.symbol, req.timeframe);
+                let engine = match state.engines.get(&engine_key) {
                     Some(e) => e,
                     None => {
                         return CachedResult::from_aggregates(
@@ -360,7 +372,8 @@ async fn full_search_handler(
     let symbol = req.symbol.clone();
 
     let context_cached = state.cache.get_or_calculate_context(&symbol, &session_id, &ctx_date, || {
-        let Some(engine) = state.engines.get(&req.symbol) else {
+        let engine_key = format!("{}:{}", req.symbol, req.timeframe);
+        let Some(engine) = state.engines.get(&engine_key) else {
             return CachedResult::from_aggregates(
                 AggregateData {
                     avg_up: 0.0,
@@ -468,6 +481,10 @@ async fn search_handler(
     let mut last_result = None;
     let timeframe_seconds = crate::cache::RetroVisCache::timeframe_to_seconds(&req.timeframe);
 
+    let engine_key = format!("{}:{}", req.symbol, req.timeframe);
+    let engine = state.engines.get(&engine_key).expect("Ticker not found");
+    let session = state.sessions.get(&req.session_id).expect("Session not found");
+
     for i in 1..=req.candles.len() {
         let historical_slice = &req.candles[0..i];
         let current_ts = req.timestamp - ((req.candles.len() - i) as i64 * timeframe_seconds);
@@ -479,8 +496,9 @@ async fn search_handler(
             current_ts,
             || {
 
-                let engine = state.engines.get(&req.symbol).expect("Ticker not found");
-                let session = state.sessions.get(&req.session_id).expect("Session not found");
+                /*let engine_key = format!("{}:{}", req.symbol, req.timeframe);
+                let engine = state.engines.get(&engine_key).expect("Engine not found");
+                let session = state.sessions.get(&req.session_id).expect("Session not found");*/
 
                 let normalized: Vec<NormalizedCandle<f32>> = historical_slice
                     .iter()
@@ -565,7 +583,7 @@ async fn day_details_handler(
     let symbol = params.get("symbol").cloned().unwrap_or_else(|| "NQ".to_string());
     let date = params.get("date").cloned().unwrap_or_default();
 
-    if let Some(engine) = state.engines.get(&symbol) {
+    if let Some(engine) = state.engines.get(&format!("{}:M5", symbol)) {
         return Json(engine.get_day_candles(&date,true));
     }
 
@@ -585,14 +603,14 @@ async fn context_matches_handler(
     let session_id = req.session_id.clone();
     let date = chrono::Local::now().format("%Y-%m-%d").to_string(); 
 
+    let engine = state.engines.get(&format!("{}:M5", req.symbol)).expect("Ticker not found"); // M5 hardcodato perché il prezzo di apertura non cambia con il timeframe
+    let session = state.sessions.get(&req.session_id).expect("Session not found");
+
     let cached_res = state.cache.get_or_calculate_context(
         &symbol, 
         &session_id, 
         &date, 
         || {
-            let engine = state.engines.get(&req.symbol).expect("Ticker not found");
-            let session = state.sessions.get(&req.session_id).expect("Session not found");
-
             let current_context = Context::new(
                 req.session_open, req.prev_close, req.prev_high, 
                 req.prev_low, req.intraday_high, req.intraday_low,
@@ -614,7 +632,6 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
     let mut sum_mae = 0.0;
     let mut sum_eos = 0.0;
     let mut sum_eoh = 0.0f32;
-    let mut count_eoh = 0usize;
 
     let matches: Vec<MatchResponse> = matches.iter().map(|m| {
         let up = (m.mfe_pct / 100.0) * current_price;
@@ -628,7 +645,6 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
 
 
         sum_eoh += eoh_pts;
-        count_eoh += 1;
 
         MatchResponse {
             date: m.date.clone(),
@@ -645,7 +661,7 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
     let avg_up = if count > 0.0 { sum_mfe / count } else { 0.0 };
     let avg_down = if count > 0.0 { sum_mae / count } else { 0.0 };
     let avg_eos = if count > 0.0 { sum_eos / count } else { 0.0 };
-    let avg_eoh = if count_eoh > 0 { sum_eoh / count_eoh as f32 } else { 0.0 };
+    let avg_eoh = if !matches.is_empty() { sum_eoh / matches.len() as f32 } else { 0.0 };
     
     let long_edge = avg_up / (if avg_down == 0.0 { 1.0 } else { avg_down });
     let short_edge = avg_down / (if avg_up == 0.0 { 1.0 } else { avg_up });
