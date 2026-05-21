@@ -31,7 +31,7 @@ public class RetroVis : Indicator
     public string ServerUrl = "http://127.0.0.1:9999";
 
     [InputParameter("Enable AI Analysis",4)]
-    public bool EnableAiAnalysis { get; set; } = true;
+    public bool EnableAiAnalysis { get; set; } = false;
 
     #endregion
 
@@ -95,7 +95,7 @@ public class RetroVis : Indicator
     }
     protected override void OnInit()
     {
-        httpClient.Timeout = TimeSpan.FromSeconds(30);
+        httpClient.Timeout = TimeSpan.FromSeconds(60);
 
         this.SearchUrl = $"{ServerUrl.TrimEnd('/')}/search";
         this.ContextUrl = $"{ServerUrl.TrimEnd('/')}/context-search";
@@ -198,7 +198,7 @@ public class RetroVis : Indicator
             
             string json = JsonSerializer.Serialize(request);
             // Log("request timestamp:" + finalTimestamp);
-            // Log("request json:" + json);
+            Log("request json:" + json);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
             var response = await httpClient.PostAsync(SearchUrl, content);
             //Log(response.ToString());
@@ -783,8 +783,9 @@ public class RetroVis : Indicator
         return tf; // Fallback se è già nel formato corretto o ignoto
     }
 
-    protected override void OnClear()
+    public override void Dispose()
     {
+        //Log("ondispose");
         this.CurrentChart.MouseUp -= OnChartMouseUp;
         this.CurrentChart.MouseDown -= OnChartMouseDown;
     }

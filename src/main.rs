@@ -19,7 +19,9 @@ mod parser;
 mod engine;
 mod cache;
 mod gemini;
+//mod claude;
 //mod ollama;
+mod determination_engine;
 mod ai_analysis;
 mod oanda;
 mod full_search;
@@ -29,6 +31,7 @@ use models::{QueryRequest,AppState,MatchesResponse,MatchResponse, MatchOutcome,C
 use crate::ai_provider::AiProvider;
 use crate::oanda::candle_start_utc_ny_row;
 use gemini::GeminiBroker;
+//use claude::ClaudeBroker;
 //use ollama::OllamaBroker;
 use engine::SearchEngine;
 
@@ -65,6 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Passala al broker
     let cache = Arc::new(cache::RetroVisCache::new());
     let broker: Arc<dyn AiProvider> = Arc::new(GeminiBroker::new(env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY")));
+    //let broker: Arc<dyn AiProvider> = Arc::new(ClaudeBroker::new(env::var("CLAUDE_API_KEY").expect("CLAUDE_API_KEY")));
     //let broker: Arc<dyn AiProvider> = Arc::new(OllamaBroker::new());
     let ai_service = Arc::new(AiAnalysisService::new(
         broker.clone(), 

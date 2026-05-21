@@ -2,9 +2,10 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use reqwest::Client;
 use crate::ai_provider::AiProvider;
+use crate::determination_engine::DeterminationEngine;
 
 use std::time::Duration;
-use tokio::time::timeout;
+// use tokio::time::timeout;
 
 pub struct GeminiBroker {
     api_key: String,
@@ -25,7 +26,8 @@ impl GeminiBroker {
 #[async_trait]
 impl AiProvider for GeminiBroker {
     async fn request_analysis(&self, data: Value) -> Result<String, String> {
-        let model = "gemini-3-flash-preview";
+        // let model = "gemini-3.5-flash";
+        let model = "gemini-3.1-flash-lite";
         let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
             model,
@@ -33,57 +35,67 @@ impl AiProvider for GeminiBroker {
         );
 
         let symbol = data["symbol"].as_str().unwrap_or("N/A");
+        let (verdict, bias, market_state, observation) = DeterminationEngine::evaluate(&data);
         let report = self.format_trading_report(&data);
+
         let payload = json!({
-            "systemInstruction": { "parts": { "text": self.system_prompt() } },
+            "systemInstruction": { "parts": { "text": self.system_prompt(&verdict, &bias, &market_state, &observation) } },
             "contents": { "parts": { "text": report } },
-            "generationConfig": { "temperature": 0.5 }
+            "generationConfig": { 
+                "temperature": 0.0,
+                "topP": 0.1
+            }
         });
-        //println!("Report {:#?}", report);
-        let backoffs = [500, 1000, 3000];
+        // println!("Report {:#?}", report);
+        let backoffs = [500, 1000, 0];
         
         for (attempt, delay) in backoffs.iter().enumerate() {
             println!("REQ | Symbol: {} | Attempt: {}", symbol, attempt + 1);
 
-            let request_timeout = Duration::from_secs(15);
-
-            let resp = timeout(
-                request_timeout, 
-                self.http_client.post(&url).json(&payload).send()
-            ).await;
+            let resp = self.http_client
+            .post(&url)
+            .json(&payload)
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await;
 
             match resp {
-                // 1. Il timeout NON è scattato, abbiamo un risultato dalla richiesta HTTP
-                Ok(http_result) => {
-                    match http_result {
-                        Ok(r) => { // Abbiamo una Response valida
-                            let status = r.status();
-                            if status.is_success() {
-                                let json = r.json::<Value>().await.map_err(|e| format!("JSON_PARSE_ERR: {}", e))?;
-                                return json["candidates"][0]["content"]["parts"][0]["text"]
-                                    .as_str()
-                                    .map(|s| s.to_string())
-                                    .ok_or_else(|| format!("MALFORMED_RESPONSE: {}", json));
-                            }
+                Ok(r) => { 
+                    let status = r.status();
+                    if status.is_success() {
+                        let json = r.json::<Value>().await.map_err(|e| format!("JSON_PARSE_ERR: {}", e))?;
+                        
+                        let full_text = json["candidates"][0]["content"]["parts"][0]["text"]
+                            .as_str()
+                            .ok_or_else(|| format!("MALFORMED_RESPONSE: {}", json))?;
 
-                            if status.as_u16() == 503 || status.as_u16() == 429 {
-                                println!("RETRY | Symbol: {} | Status: {} | Delay: {}ms", symbol, status, delay);
-                                tokio::time::sleep(Duration::from_millis(*delay)).await;
-                                continue;
-                            }
-                            return Err(format!("API_ERROR | Status: {}", status));
-                        }
-                        Err(e) => { // Errore di rete (es. DNS, connessione rifiutata)
-                            println!("NET_ERROR | Symbol: {} | Error: {}", symbol, e);
-                            if attempt == backoffs.len() - 1 { return Err(e.to_string()); }
+                        // Taglia tutto ciò che si trova prima di </internal_analysis> (incluso il tag stesso)
+                        let clean_text = if let Some(idx) = full_text.find("</internal_analysis>") {
+                            &full_text[idx + "</internal_analysis>".len()..]
+                        } else {
+                            full_text
+                        };
+                        return Ok(clean_text.trim().to_string());
+                    }
+
+                    if status.as_u16() == 503 || status.as_u16() == 429 {
+                        if attempt < backoffs.len() - 1 {
+                            println!("RETRY Claude | Symbol: {} | Status: {} | Delay: {}ms", symbol, status, delay);
                             tokio::time::sleep(Duration::from_millis(*delay)).await;
                         }
+                        continue;
                     }
+                    return Err(format!("API_ERROR | Status: {}", status));
                 }
-                // 2. Il timeout È scattato (Elapsed)
-                Err(_) => {
-                    println!("TIMEOUT | Symbol: {} | No response after {:?}ms", symbol, request_timeout);
-                    if attempt == backoffs.len() - 1 { return Err("TIMEOUT_FINAL_FAIL".into()); }
+                Err(e) => {
+                    // reqwest restituisce un errore anche in caso di timeout nativo
+                    if e.is_timeout() {
+                        println!("TIMEOUT | Symbol: {} | No response after 15s", symbol);
+                        if attempt == backoffs.len() - 1 { return Err("TIMEOUT_FINAL_FAIL".into()); }
+                    } else {
+                        println!("NET_ERROR | Symbol: {} | Error: {}", symbol, e);
+                        if attempt == backoffs.len() - 1 { return Err(e.to_string()); }
+                    }
                     tokio::time::sleep(Duration::from_millis(*delay)).await;
                 }
             }
