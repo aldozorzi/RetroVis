@@ -4,15 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-axum = "0.7"
-tokio = { version = "1", features = ["full"] }
+axum = { version = "0.7", default-features = false, features = ["tokio", "http1", "json", "query"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "time", "signal"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 csv = "1.1"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.8"
 dashmap = "6.1.0"
-reqwest = { version = "0.13.3", features = ["json"] }
+reqwest = { version = "0.13.3", default-features = false, features = ["rustls", "json"] }
 dotenvy = "0.15.7"
 async-trait = "0.1.89"
 indoc = "2.0.7"
