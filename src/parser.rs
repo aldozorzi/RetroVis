@@ -1,16 +1,16 @@
 use std::error::Error;
 use std::fs::File;
-use crate::models::{RawCandle, HistoricalDay};
+use crate::models::{RawCandle, CandleStore};
 use memmap2::Mmap;
 
-pub fn load_and_process(path: &str, symbol: &str) -> Result<Vec<HistoricalDay<f32>>, Box<dyn Error>> {
+pub fn load_and_process(path: &str, symbol: &str) -> Result<CandleStore, Box<dyn Error>> {
     let file = File::open(path)?;
     let mmap = unsafe { Mmap::map(&file)? };
 
-    let mut all_days = Vec::with_capacity(5000); 
-    let mut current_day_candles = Vec::with_capacity(300);
+    let mut candles: Vec<RawCandle<f32>> = Vec::with_capacity(400_000);
+    let mut days: Vec<(u32, std::ops::Range<usize>)> = Vec::with_capacity(5000);
     let mut current_date_num = 0u32;
-
+    let mut day_start = 0usize;
     let mut start = 0;
     let buffer = &mmap[..];
 
@@ -18,115 +18,76 @@ pub fn load_and_process(path: &str, symbol: &str) -> Result<Vec<HistoricalDay<f3
         if buffer[i] == b'\n' {
             let line = &buffer[start..i];
             start = i + 1;
-
             if line.is_empty() { continue; }
 
-            // Split manuale sui byte del punto e virgola
             let mut fields = line.split(|&b| b == b';');
-
-            let date_bytes = match fields.next() { Some(f) => f, None => continue };
-            let time_bytes = match fields.next() { Some(f) => f, None => continue };
-            let open_bytes = match fields.next() { Some(f) => f, None => continue };
-            let high_bytes = match fields.next() { Some(f) => f, None => continue };
-            let low_bytes = match fields.next() { Some(f) => f, None => continue };
-            let close_bytes = match fields.next() { Some(f) => f, None => continue };
+            let date_bytes   = match fields.next() { Some(f) => f, None => continue };
+            let time_bytes   = match fields.next() { Some(f) => f, None => continue };
+            let open_bytes   = match fields.next() { Some(f) => f, None => continue };
+            let high_bytes   = match fields.next() { Some(f) => f, None => continue };
+            let low_bytes    = match fields.next() { Some(f) => f, None => continue };
+            let close_bytes  = match fields.next() { Some(f) => f, None => continue };
             let volume_bytes = match fields.next() { Some(f) => f, None => continue };
 
-            let date_num = match parse_date_to_u32(date_bytes) { Some(d) => d, None => continue };
-            let open = match parse_f32(open_bytes) { Some(v) => v, None => continue };
-            let high = match parse_f32(high_bytes) { Some(v) => v, None => continue };
-            let low = match parse_f32(low_bytes) { Some(v) => v, None => continue };
-            let close = match parse_f32(close_bytes) { Some(v) => v, None => continue };
-            let volume = match parse_f32(volume_bytes) { Some(v) => v, None => continue };
-
+            let date_num  = match parse_date_to_u32(date_bytes) { Some(d) => d, None => continue };
+            let open      = match parse_f32(open_bytes)   { Some(v) => v, None => continue };
+            let high      = match parse_f32(high_bytes)   { Some(v) => v, None => continue };
+            let low       = match parse_f32(low_bytes)    { Some(v) => v, None => continue };
+            let close     = match parse_f32(close_bytes)  { Some(v) => v, None => continue };
+            let volume    = match parse_f32(volume_bytes) { Some(v) => v, None => continue };
             let timestamp = calculate_timestamp(date_bytes, time_bytes);
 
-            let r = RawCandle {
-                timestamp,
-                open,
-                high,
-                low,
-                close,
-                _volume: volume,
-            };
-
             if current_date_num != 0 && date_num != current_date_num {
-                all_days.push(HistoricalDay {
-                    date: current_date_num,
-                    candles: std::mem::take(&mut current_day_candles),
-                });
+                days.push((current_date_num, day_start..candles.len()));
+                day_start = candles.len();
             }
-
             current_date_num = date_num;
-            current_day_candles.push(r);
+            candles.push(RawCandle { timestamp, open, high, low, close, _volume: volume });
         }
     }
-
-    if !current_day_candles.is_empty() {
-        all_days.push(HistoricalDay {
-            date: current_date_num,
-            candles: current_day_candles,
-        });
+    if day_start < candles.len() {
+        days.push((current_date_num, day_start..candles.len()));
     }
 
-    println!("{} - Caricate {} giornate storiche.", symbol, all_days.len());
-    Ok(all_days)
+    println!("{} - {} giorni, {} candele", symbol, days.len(), candles.len());
+    Ok(CandleStore { candles, days })
 }
 
-/// Aggrega candele da `source_tf_min` a `target_tf_min`.
-/// `target_tf_min` deve essere multiplo di `source_tf_min`.
-pub fn resample(source_days: &[HistoricalDay<f32>], _from_min: u32, to_min: u32) -> Vec<HistoricalDay<f32>> {
-    let mut resampled_days = Vec::with_capacity(source_days.len());
+pub fn resample(source: &CandleStore, to_min: u32) -> CandleStore {
     let interval_secs = (to_min * 60) as i64;
+    let mut candles: Vec<RawCandle<f32>> = Vec::with_capacity(source.candles.len() / 3);
+    let mut days: Vec<(u32, std::ops::Range<usize>)> = Vec::with_capacity(source.days.len());
 
-    for day in source_days {
-        if day.candles.is_empty() { continue; }
+    for (date, range) in &source.days {
+        let day_start = candles.len();
+        let mut bucket: Option<RawCandle<f32>> = None;
 
-        let mut resampled_candles = Vec::with_capacity(day.candles.len() / 3);
-        let mut current_bucket: Option<RawCandle<f32>> = None;
-
-        for candle in &day.candles {
-            // Arrotonda il timestamp all'inizio dell'intervallo da 15 minuti
-            let bucket_timestamp = (candle.timestamp / interval_secs) * interval_secs;
-
-            match &mut current_bucket {
-                Some(b) if b.timestamp == bucket_timestamp => {
-                    // Aggiorna la candela da 15 minuti corrente
+        for candle in &source.candles[range.clone()] {
+            let ts = (candle.timestamp / interval_secs) * interval_secs;
+            match &mut bucket {
+                Some(b) if b.timestamp == ts => {
                     if candle.high > b.high { b.high = candle.high; }
-                    if candle.low < b.low { b.low = candle.low; }
-                    b.close = candle.close;
+                    if candle.low  < b.low  { b.low  = candle.low;  }
+                    b.close    = candle.close;
                     b._volume += candle._volume;
                 }
                 _ => {
-                    // Se c'è un bucket precedente completo, lo salviamo
-                    if let Some(b) = current_bucket.take() {
-                        resampled_candles.push(b);
-                    }
-                    // Inizializza un nuovo bucket da 15 minuti
-                    current_bucket = Some(RawCandle {
-                        timestamp: bucket_timestamp,
-                        open: candle.open,
-                        high: candle.high,
-                        low: candle.low,
-                        close: candle.close,
+                    if let Some(b) = bucket.take() { candles.push(b); }
+                    bucket = Some(RawCandle {
+                        timestamp: ts,
+                        open: candle.open, high: candle.high,
+                        low:  candle.low,  close: candle.close,
                         _volume: candle._volume,
                     });
                 }
             }
         }
-
-        // Push dell'ultimo bucket del giorno, se presente
-        if let Some(b) = current_bucket {
-            resampled_candles.push(b);
+        if let Some(b) = bucket { candles.push(b); }
+        if day_start < candles.len() {
+            days.push((*date, day_start..candles.len()));
         }
-
-        resampled_days.push(HistoricalDay {
-            date: day.date,
-            candles: resampled_candles,
-        });
     }
-
-    resampled_days
+    CandleStore { candles, days }
 }
 
 fn parse_f32(bytes: &[u8]) -> Option<f32> {

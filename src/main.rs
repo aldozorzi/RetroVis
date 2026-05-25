@@ -49,17 +49,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ym = thread::spawn(|| parser::load_and_process("data/ym-M5.csv", "YM").map_err(|e| e.to_string()));
     
     let nq_5m = nq.join().unwrap()?;
-    let nq_15m = parser::resample(&nq_5m, 5, 15);
+    let nq_15m = parser::resample(&nq_5m, 15);
     engines.insert("NQ:M5".to_string(), SearchEngine::new(nq_5m));
     engines.insert("NQ:M15".to_string(), SearchEngine::new(nq_15m));
 
     let gc_5m = gc.join().unwrap()?;
-    let gc_15m = parser::resample(&gc_5m, 5, 15);
+    let gc_15m = parser::resample(&gc_5m, 15);
     engines.insert("GC:M5".to_string(), SearchEngine::new(gc_5m));  
     engines.insert("GC:M15".to_string(), SearchEngine::new(gc_15m));
 
     let ym_5m = ym.join().unwrap()?;
-    let ym_15m = parser::resample(&ym_5m, 5, 15);
+    let ym_15m = parser::resample(&ym_5m, 15);
     engines.insert("YM:M5".to_string(), SearchEngine::new(ym_5m));
     engines.insert("YM:M15".to_string(), SearchEngine::new(ym_15m));
 

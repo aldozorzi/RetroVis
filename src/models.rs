@@ -7,6 +7,7 @@ use dashmap::DashMap;
 use crate::cache::RetroVisCache;
 use tokio::sync::broadcast;
 use crate::ai_provider::AiProvider;
+use std::ops::Range;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RawCandle<T> {
@@ -40,11 +41,31 @@ impl NormalizedCandle<f32> {
     }
 }
 
+pub struct CandleStore {
+    pub candles: Vec<RawCandle<f32>>,
+    pub days: Vec<(u32, Range<usize>)>,  // (date_num, range in candles)
+}
+
+impl CandleStore {
+    pub fn len(&self) -> usize { self.days.len() }
+    pub fn is_empty(&self) -> bool { self.days.is_empty() }
+
+    pub fn get(&self, idx: usize) -> Option<(u32, &[RawCandle<f32>])> {
+        self.days.get(idx).map(|(d, r)| (*d, &self.candles[r.clone()]))
+    }
+
+    pub fn find_by_date(&self, date: u32) -> Option<usize> {
+        self.days.binary_search_by_key(&date, |(d, _)| *d).ok()
+    }
+}
+
+/*
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoricalDay<T> {
     pub date: u32,
     pub candles: Vec<RawCandle<T>>, 
 }
+*/ 
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SessionConfig {
@@ -127,7 +148,7 @@ pub struct AggregateData {
 }
 
 pub struct AppState {
-    pub engines: HashMap<String, SearchEngine<f32>>,
+    pub engines: HashMap<String, SearchEngine>,
     pub sessions: HashMap<String, SessionConfig>,
     pub cache: Arc<crate::cache::RetroVisCache>,
     pub broker: Arc<dyn AiProvider>,
