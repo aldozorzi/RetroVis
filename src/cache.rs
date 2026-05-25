@@ -20,7 +20,7 @@ impl RetroVisCache {
         &self, 
         asset: &str, 
         session_id: &str, 
-        date: &str, 
+        timestamp: i64, 
         calc_fn: F
     ) -> CachedResult 
     where 
@@ -29,7 +29,7 @@ impl RetroVisCache {
         let key = ContextCacheKey {
             asset: asset.to_string(),
             session_id: session_id.to_string(),
-            date: date.to_string(),
+            timestamp,
         };
 
         self.context_results.entry(key)
@@ -41,12 +41,12 @@ impl RetroVisCache {
         &self, 
         asset: &str, 
         session_id: &str, 
-        date: &str
+        timestamp: i64
     ) -> Option<CachedResult> { // Restituisce Option perché il dato potrebbe non esserci
         let key = ContextCacheKey {
             asset: asset.to_string(),
             session_id: session_id.to_string(),
-            date: date.to_string(),
+            timestamp,
         };
 
         // Usiamo .get() per una lettura concorrente condivisa

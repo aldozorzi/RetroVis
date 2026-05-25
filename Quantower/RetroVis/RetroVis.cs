@@ -10,6 +10,7 @@ using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using TradingPlatform.BusinessLayer;
 using TradingPlatform.BusinessLayer.Chart;
@@ -182,9 +183,7 @@ public class RetroVis : Indicator
         try
         {
             var lastCandle = candles[candles.Count - 1];
-            string fullDateTimeStr = $"{lastCandle.Date} {lastCandle.Time}";
-            DateTime dt = DateTime.ParseExact(fullDateTimeStr, "yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
-            long finalTimestamp = (long)(dt - new DateTime(1970, 1, 1)).TotalSeconds;
+            long finalTimestamp = lastCandle.Timestamp;
             var request = new QueryRequest
             {
                 Symbol = ticker,
@@ -222,9 +221,7 @@ public class RetroVis : Indicator
         try
         {
             var lastCandle = candles[candles.Count - 1];
-            string fullDateTimeStr = $"{lastCandle.Date} {lastCandle.Time}";
-            DateTime dt = DateTime.ParseExact(fullDateTimeStr, "yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
-            long finalTimestamp = (long)(dt - new DateTime(1970, 1, 1)).TotalSeconds;
+            long finalTimestamp = lastCandle.Timestamp;
             var request = new AiAnalysisQueryRequest
             {
 
@@ -473,9 +470,13 @@ public class RetroVis : Indicator
             foreach (var m in candlesResults)
             {
                 matchClickAreas.Add(new RectangleF(tx, ty, panelRect.Width - 30, 50));
-                matchDates.Add(m.Date);
 
-                gr.DrawString($"{m.Date} {m.Time} (MATCH:{m.Similarity:F1}%)", dataFont, Brushes.Gray, tx, ty);
+                DateTime matchDt = DateTimeOffset.FromUnixTimeSeconds(m.Timestamp).DateTime;
+                string dateStr = matchDt.ToString("yyyy-MM-dd");
+
+                matchDates.Add(dateStr);
+
+                gr.DrawString($"{dateStr} (MATCH:{m.Similarity:F1}%)", dataFont, Brushes.Gray, tx, ty);
                 ty += 15;
 
                 string vals = $"UP: {m.UpPts:+0.0} | DOWN: {m.DownPts:0.0}";
@@ -515,9 +516,13 @@ public class RetroVis : Indicator
                 var ctxRect = new RectangleF(tx, ty, panelRect.Width - 24, 50);
                 gr.FillRectangle(ctxBgBrush, ctxRect);
                 contextClickAreas.Add(ctxRect);
-                contextDates.Add(m.Date);
 
-                gr.DrawString($"{m.Date} {m.Time} (MATCH:{m.Similarity:F1}%)", dataFont, Brushes.Gray, tx, ty);
+                DateTime matchDt = DateTimeOffset.FromUnixTimeSeconds(m.Timestamp).DateTime;
+                string dateStr = matchDt.ToString("yyyy-MM-dd");
+
+                contextDates.Add(dateStr);
+
+                gr.DrawString($"{dateStr} (MATCH:{m.Similarity:F1}%)", dataFont, Brushes.Gray, tx, ty);
                 ty += 15;
 
                 string vals = $"UP: {m.UpPts:+0.0}  DOWN: {m.DownPts:0.0}";
@@ -750,8 +755,7 @@ public class RetroVis : Indicator
             DateTime bTime = TimeZoneInfo.ConvertTimeFromUtc(Time(i).ToUniversalTime(), NyTz);
             candlesToInquire.Add(new RawCandle
             {
-                Date = bTime.ToString("yyyy-MM-dd"),
-                Time = bTime.ToString("HH:mm:ss"),
+                Timestamp = ((DateTimeOffset)bTime).ToUnixTimeSeconds(),
                 Open = (float)Open(i),
                 High = (float)High(i),
                 Low = (float)Low(i),
@@ -864,8 +868,7 @@ public class RetroVis : Indicator
 
     public class RawCandle
     {
-        [JsonPropertyName("date")] public string Date { get; set; }
-        [JsonPropertyName("time")] public string Time { get; set; }
+        [JsonPropertyName("timestamp")] public long Timestamp { get; set; }
         [JsonPropertyName("open")] public float Open { get; set; }
         [JsonPropertyName("high")] public float High { get; set; }
         [JsonPropertyName("low")] public float Low { get; set; }
@@ -892,8 +895,7 @@ public class RetroVis : Indicator
 
     public class MatchResponse
     {
-        [JsonPropertyName("date")] public string Date { get; set; }
-        [JsonPropertyName("time")] public string Time { get; set; }
+        [JsonPropertyName("timestamp")] public long Timestamp { get; set; }
         [JsonPropertyName("similarity")] public float Similarity { get; set; } 
         [JsonPropertyName("up_pts")] public float UpPts { get; set; }           
         [JsonPropertyName("down_pts")] public float DownPts { get; set; }      

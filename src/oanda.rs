@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
+use chrono::{DateTime, SecondsFormat, /*TimeZone,*/ Utc};
 use chrono_tz::America::New_York;
 use dashmap::DashMap;
 use reqwest::StatusCode;
@@ -142,15 +142,13 @@ impl OandaClient {
                     .map_err(|e| OandaError::Parse(e.to_string()))?
                     .with_timezone(&Utc);
                 let ny = utc.with_timezone(&New_York);
-                let date = ny.format("%Y-%m-%d").to_string();
-                let time = ny.format("%H:%M:%S").to_string();
+                let timestamp = ny.timestamp();
                 let o = parse_px(&c.mid.o)?;
                 let h = parse_px(&c.mid.h)?;
                 let l = parse_px(&c.mid.l)?;
                 let cl = parse_px(&c.mid.c)?;
                 out.push(RawCandle {
-                    date,
-                    time,
+                    timestamp,
                     open: o,
                     high: h,
                     low: l,
@@ -159,11 +157,7 @@ impl OandaClient {
                 });
             }
 
-            out.sort_by(|a, b| {
-                let ta = format!("{} {}", a.date, a.time);
-                let tb = format!("{} {}", b.date, b.time);
-                ta.cmp(&tb)
-            });
+            out.sort_by_key(|c| c.timestamp);
 
             self.response_cache.insert(cache_key, out.clone());
             return Ok(out);
@@ -186,6 +180,9 @@ impl OandaClient {
             + chrono::Duration::seconds(tf_sec);
 
         let mut merged: Vec<RawCandle<f32>> = Vec::new();
+        // Usa un HashSet per controllare i duplicati in O(1) anziché O(N)
+        let mut seen_timestamps = std::collections::HashSet::new();
+        
         let page: u32 = 500;
         let mut safety = 0;
 
@@ -202,17 +199,15 @@ impl OandaClient {
             let earliest = candle_start_utc_ny_row(&batch[0])?;
             to_exclusive = earliest;
 
+            // Inserisce solo se il timestamp non è già stato tracciato
             for c in batch {
-                if !merged.iter().any(|x| x.date == c.date && x.time == c.time) {
+                if seen_timestamps.insert(c.timestamp) {
                     merged.push(c);
                 }
             }
 
-            merged.sort_by(|a, b| {
-                let ta = format!("{} {}", a.date, a.time);
-                let tb = format!("{} {}", b.date, b.time);
-                ta.cmp(&tb)
-            });
+            // Ordinamento numerico diretto sui timestamp i64
+            merged.sort_by_key(|c| c.timestamp);
         }
 
         Ok(merged)
@@ -220,19 +215,8 @@ impl OandaClient {
 }
 
 pub fn candle_start_utc_ny_row(c: &RawCandle<f32>) -> Result<DateTime<Utc>, OandaError> {
-    let d = chrono::NaiveDate::parse_from_str(&c.date, "%Y-%m-%d")
-        .map_err(|e| OandaError::Parse(e.to_string()))?;
-    let t = chrono::NaiveTime::parse_from_str(&c.time, "%H:%M:%S")
-        .map_err(|e| OandaError::Parse(e.to_string()))?;
-    let naive_dt = d.and_time(t);
-    let loc = match New_York.from_local_datetime(&naive_dt) {
-        chrono::LocalResult::Single(dt) => dt,
-        chrono::LocalResult::Ambiguous(dt, _) => dt,
-        chrono::LocalResult::None => {
-            return Err(OandaError::Parse("invalida ora locale NY".into()));
-        }
-    };
-    Ok(loc.with_timezone(&Utc))
+    DateTime::from_timestamp(c.timestamp, 0)
+        .ok_or_else(|| OandaError::Parse("Timestamp invalido".into()))
 }
 
 fn parse_px(s: &str) -> Result<f32, OandaError> {

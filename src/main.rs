@@ -13,7 +13,7 @@ use serde_json::json;
 use dotenvy::dotenv;
 use std::env;
 use std::thread;
-use chrono::DateTime;
+//use chrono::DateTime;
 
 mod models;
 mod parser;
@@ -368,10 +368,10 @@ async fn full_search_handler(
         }
     };
 
-    let ctx_date = ctx_inputs.context_cache_date.clone();
+    let ctx_date = ctx_inputs.context_cache_date;
     let symbol = req.symbol.clone();
 
-    let context_cached = state.cache.get_or_calculate_context(&symbol, &session_id, &ctx_date, || {
+    let context_cached = state.cache.get_or_calculate_context(&symbol, &session_id, ctx_date, || {
         let engine_key = format!("{}:{}", req.symbol, req.timeframe);
         let Some(engine) = state.engines.get(&engine_key) else {
             return CachedResult::from_aggregates(
@@ -432,7 +432,7 @@ async fn full_search_handler(
 
     let context_res = state
         .cache
-        .get_context(&req.symbol, &session_id, &ctx_date);
+        .get_context(&req.symbol, &session_id, ctx_date);
 
     let ai_data = json!({
         "symbol": req.symbol,
@@ -470,10 +470,10 @@ async fn search_handler(
     println!("Simbolo: {}", req.symbol);
     println!("Sessione: {}", req.session_id);
     println!("Numero candele inviate: {}", req.candles.len());
-    println!("Span: {} - {}", req.candles.first().unwrap().time, req.candles.last().unwrap().time);
+    println!("Span: {} - {}", req.candles.first().unwrap().timestamp, req.candles.last().unwrap().timestamp);
     
     if let Some(first) = req.candles.first() {
-        println!("Prima candela inviata: {} {}", first.date, first.time);
+        println!("Prima candela inviata: {}", first.timestamp);
     }
     // --------------------
     */
@@ -515,7 +515,7 @@ async fn search_handler(
         last_result = Some(cached_res);
     }
     let response = MatchesResponse::from(last_result.expect("No candles provided"));
-    
+    //println!("--- DEBUG MATCHES RESPONSE ---\n{:#?}", response);
     Json(response)
 }
 
@@ -539,14 +539,12 @@ pub async fn ai_analysis_handler(
         req.candles_len
     );
 
-    let date_str = DateTime::from_timestamp(req.timestamp, 0)
-        .map(|dt| dt.format("%Y-%m-%d").to_string())
-        .unwrap_or_default();
+    let timestamp = req.timestamp as i64;
 
     let context_res = state.cache.get_context(
         &req.symbol,
         &req.session_id,
-        &date_str
+        timestamp
     );
 
     let ai_data = json!({
@@ -581,10 +579,10 @@ async fn day_details_handler(
     Query(params): Query<HashMap<String, String>>,
 ) -> Json<Vec<models::ChartDataResponse>> {
     let symbol = params.get("symbol").cloned().unwrap_or_else(|| "NQ".to_string());
-    let date = params.get("date").cloned().unwrap_or_default();
-
+    let date_str = params.get("date").cloned().unwrap_or_default();
+    let date: u32 = date_str.parse().unwrap_or(0);
     if let Some(engine) = state.engines.get(&format!("{}:M5", symbol)) {
-        return Json(engine.get_day_candles(&date,true));
+        return Json(engine.get_day_candles(date,true));
     }
 
     Json(vec![])
@@ -601,7 +599,7 @@ async fn context_matches_handler(
     */
     let symbol = req.symbol.clone();
     let session_id = req.session_id.clone();
-    let date = chrono::Local::now().format("%Y-%m-%d").to_string(); 
+    let current_ts = chrono::Utc::now().timestamp();
 
     let engine = state.engines.get(&format!("{}:M5", req.symbol)).expect("Ticker not found"); // M5 hardcodato perché il prezzo di apertura non cambia con il timeframe
     let session = state.sessions.get(&req.session_id).expect("Session not found");
@@ -609,7 +607,7 @@ async fn context_matches_handler(
     let cached_res = state.cache.get_or_calculate_context(
         &symbol, 
         &session_id, 
-        &date, 
+        current_ts, 
         || {
             let current_context = Context::new(
                 req.session_open, req.prev_close, req.prev_high, 
@@ -633,7 +631,9 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
     let mut sum_eos = 0.0;
     let mut sum_eoh = 0.0f32;
 
-    let matches: Vec<MatchResponse> = matches.iter().map(|m| {
+    let mut response_matches = Vec::with_capacity(matches.len());
+
+    for m in matches.iter() {
         let up = (m.mfe_pct / 100.0) * current_price;
         let down = (m.mae_pct / 100.0) * current_price;
         let eos = (m.eod_ret_pct / 100.0) * current_price;
@@ -642,20 +642,19 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
         sum_mfe += up.abs();
         sum_mae += down.abs();
         sum_eos += eos;
-
-
         sum_eoh += eoh_pts;
 
-        MatchResponse {
-            date: m.date.clone(),
-            time: m.time.clone(),
+        response_matches.push(MatchResponse {
+            timestamp: m.timestamp, // Assegnazione diretta i64 senza cloni
             similarity: 1.0 / (1.0 + m.distance) * 100.0,
             up_pts: up,
             down_pts: down,
             eos_pts: eos,
-            eoh_pts: eoh_pts,
-        }
-    }).collect();
+            eoh_pts,
+        });
+    }
+
+    let matches = response_matches;
 
     let count = matches.len() as f32;
     let avg_up = if count > 0.0 { sum_mfe / count } else { 0.0 };

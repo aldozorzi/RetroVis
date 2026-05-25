@@ -138,7 +138,7 @@ pub struct ContextInputs {
     pub intraday_high: f32,
     pub intraday_low: f32,
     /// Chiave cache contesto: data calendario NY del giorno di apertura sessione.
-    pub context_cache_date: String,
+    pub context_cache_date: i64,
 }
 
 /// Replica `FetchContextMatchesAsync` usando serie temporale ordinata (vecchia → nuova).
@@ -151,7 +151,7 @@ pub fn compute_context_inputs(
     let open_start = candle_start_utc_ny_row(&candles[open_idx])
         .map_err(|e| FullSearchPrepError::CandleTime(e.to_string()))?;
     let open_ny_date = ny_date_of_bar_start(open_start);
-    let context_cache_date = open_ny_date.format("%Y-%m-%d").to_string();
+    let context_cache_date = open_start.timestamp();
 
     // Intraday pre-open: stessa data NY dell'open, al massimo 72 barre indietro (indici decrescenti).
     let mut intraday_high = session_open;

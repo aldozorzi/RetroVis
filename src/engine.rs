@@ -1,5 +1,5 @@
 use crate::models::{HistoricalDay, NormalizedCandle};
-use chrono::{NaiveDate, NaiveTime};
+use chrono::Timelike;
 
 pub struct SearchEngine<T> {
     pub dataset: Vec<HistoricalDay<T>>,
@@ -10,30 +10,12 @@ impl SearchEngine<f32> {
         Self { dataset }
     }
 
-    fn get_ny_time_for_session(date_str: &str, session: &crate::models::SessionConfig) -> Option<NaiveTime> {
-        use chrono::TimeZone;
-        use chrono_tz::Tz;
-
-        let target_date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
-            .or_else(|_| NaiveDate::parse_from_str(date_str, "%d/%m/%Y"))
-            .ok()?; 
-
-        let session_tz: Tz = session.timezone.parse().ok()?;
-        let ny_tz: Tz = "America/New_York".parse().unwrap();
-
-        let local_naive_dt = target_date.and_time(session.start_time);
-
-        let local_dt = match session_tz.from_local_datetime(&local_naive_dt) {
-            chrono::LocalResult::Single(dt) => dt,
-            chrono::LocalResult::Ambiguous(dt_earliest, _) => dt_earliest,
-            chrono::LocalResult::None => {
-                session_tz
-                    .from_local_datetime(&(local_naive_dt + chrono::Duration::hours(1)))
-                    .single()?
-            }
-        };
-
-        Some(local_dt.with_timezone(&ny_tz).time())
+    // Restituisce i secondi dall'inizio della giornata (00:00:00) per la sessione, senza conversioni o stringhe
+    fn get_ny_seconds_for_session(session: &crate::models::SessionConfig) -> i64 {
+        let hour = session.start_time.hour() as i64;
+        let minute = session.start_time.minute() as i64;
+        let second = session.start_time.second() as i64;
+        (hour * 3600) + (minute * 60) + second
     }
 
     fn calculate_distance(current: &[NormalizedCandle<f32>], historical: &[NormalizedCandle<f32>]) -> f32 {
@@ -55,14 +37,17 @@ impl SearchEngine<f32> {
     ) -> Vec<crate::models::MatchOutcome> {
         let len = current_pattern.len();
         let mut outcomes = Vec::new();
+        let session_offset_secs = Self::get_ny_seconds_for_session(session);
 
         for day in &self.dataset {
+            if day.candles.is_empty() { continue; }
             
-            let Some(start_t_ny) = Self::get_ny_time_for_session(&day.date, session) else {
-                continue;
-            };
-            let start_t_str = start_t_ny.format("%H:%M:%S").to_string();
-            if let Ok(start_idx) = day.candles.binary_search_by(|c| c.time.as_str().cmp(start_t_str.as_str())) {
+            // Troviamo la mezzanotte del giorno corrente usando il timestamp della prima candela
+            let day_start_timestamp = (day.candles[0].timestamp / 86400) * 86400;
+            let target_start_timestamp = day_start_timestamp + session_offset_secs;
+
+            // Ricerca binaria sul timestamp u64 anziché sulla stringa dell'ora
+            if let Ok(start_idx) = day.candles.binary_search_by_key(&target_start_timestamp, |c| c.timestamp) {
                 if day.candles.len() >= start_idx + len {
                     let baseline = day.candles[start_idx].open;
                     
@@ -73,24 +58,25 @@ impl SearchEngine<f32> {
 
                     let dist = Self::calculate_distance(current_pattern, &historical_pattern);
                     
-                    let eoh_time_ny = start_t_ny + chrono::Duration::hours(1);
-                    let eoh_time_str = eoh_time_ny.format("%H:%M:%S").to_string();
+                    // Fine della prima ora: +3600 secondi
+                    let eoh_timestamp = target_start_timestamp + 3600;
                     let eoh_pct = day.candles[start_idx..]
                         .iter()
-                        .filter(|c| c.time <= eoh_time_str)
+                        .take_while(|c| c.timestamp <= eoh_timestamp)
                         .last()
                         .map(|c| ((c.close - baseline) / baseline) * 100.0);
 
+                    // Calcolo dei limiti orari numerici (09:25:00 = 33900 secondi dalla mezzanotte)
                     let end_idx = if session.id == "LONDON_OPEN" {
+                        let london_end_timestamp = day_start_timestamp + 33900;
                         day.candles.iter()
-                            .position(|c| c.time == "09:25:00")
+                            .position(|c| c.timestamp == london_end_timestamp)
                             .unwrap_or(day.candles.len() - 1)
                     } else {
                         day.candles.len() - 1
                     };
                     let actual_end = if end_idx > start_idx { end_idx } else { day.candles.len() - 1 };
 
-                    // Calcolo MFE/MAE/Return sull'intera giornata rimanente
                     let mut max_high = baseline;
                     let mut min_low = baseline;
                     let last_close = day.candles[actual_end].close;
@@ -101,8 +87,7 @@ impl SearchEngine<f32> {
                     }
 
                     outcomes.push(crate::models::MatchOutcome {
-                        date: day.date.clone(),
-                        time: day.candles[start_idx].time.clone(),
+                        timestamp: day.candles[start_idx].timestamp,
                         distance: dist,
                         eod_ret_pct: ((last_close - baseline) / baseline) * 100.0,
                         mfe_pct: ((max_high - baseline) / baseline) * 100.0,
@@ -117,16 +102,12 @@ impl SearchEngine<f32> {
         outcomes.into_iter().take(top_k).collect()
     }
 
-    pub fn get_day_candles(&self, date: &str, include_prev: bool) -> Vec<crate::models::ChartDataResponse> {
-
+    pub fn get_day_candles(&self, date: u32, include_prev: bool) -> Vec<crate::models::ChartDataResponse> {
         let pos = self.dataset.iter().position(|d| d.date == date);
+        let Some(pos) = pos else { return Vec::new(); };
 
-        let Some(pos) = pos else {
-            return Vec::new();
-        };
-
-        let prev_candles: &[crate::models::RawCandle<f32>] = if include_prev && pos > 0 {
-            &self.dataset[pos - 1].candles
+        let prev_candles = if include_prev && pos > 0 {
+            self.dataset[pos - 1].candles.as_slice()
         } else {
             &[]
         };
@@ -136,7 +117,7 @@ impl SearchEngine<f32> {
         prev_candles.iter()
             .chain(curr_candles.iter())
             .map(|c| crate::models::ChartDataResponse {
-                time: format!("{} {}", c.date, c.time),
+                timestamp: c.timestamp, // Espone direttamente il timestamp lineare alla UI/grafico
                 open: c.open,
                 high: c.high,
                 low: c.low,
@@ -146,25 +127,24 @@ impl SearchEngine<f32> {
     }
 
     pub fn find_context_matches(
-    &self,
-    current_context: &crate::models::Context,
-    top_k: usize,
-    session: &crate::models::SessionConfig,
-) -> Vec<crate::models::MatchOutcome> {
+        &self,
+        current_context: &crate::models::Context,
+        top_k: usize,
+        session: &crate::models::SessionConfig,
+    ) -> Vec<crate::models::MatchOutcome> {
         let mut outcomes = Vec::new();
+        let session_offset_secs = Self::get_ny_seconds_for_session(session);
 
         for (i, day) in self.dataset.iter().enumerate() {
-            if i == 0 { continue; }
+            if i == 0 || day.candles.is_empty() { continue; }
 
-            let Some(start_t_ny) = Self::get_ny_time_for_session(&day.date, session) else {
+            let day_start_timestamp = (day.candles[0].timestamp / 86400) * 86400;
+            let target_start_timestamp = day_start_timestamp + session_offset_secs;
+
+            let Ok(start_idx) = day.candles.binary_search_by_key(&target_start_timestamp, |c| c.timestamp) else {
                 continue;
             };
-            let start_t_str = start_t_ny.format("%H:%M:%S").to_string();
-            let Ok(start_idx) = day.candles.binary_search_by(|c| c.time.as_str().cmp(start_t_str.as_str())) else {
-                continue;
-            };
 
-            // prev day data
             let prev_day = &self.dataset[i - 1];
             let prev_close = match prev_day.candles.last() {
                 Some(c) => c.close,
@@ -173,7 +153,6 @@ impl SearchEngine<f32> {
             let prev_high = prev_day.candles.iter().map(|c| c.high).fold(f32::NEG_INFINITY, f32::max);
             let prev_low  = prev_day.candles.iter().map(|c| c.low).fold(f32::INFINITY, f32::min);
 
-            // Max/min current day before session start
             let (intraday_high, intraday_low) = if start_idx == 0 {
                 let open = day.candles[0].open;
                 (open, open)
@@ -194,26 +173,25 @@ impl SearchEngine<f32> {
             );
 
             let dist = current_context.distance(&hist_context);
-
-            let eoh_time_ny = start_t_ny + chrono::Duration::hours(1);
-            let eoh_time_str = eoh_time_ny.format("%H:%M:%S").to_string();
+            let eoh_timestamp = target_start_timestamp + 3600;
             let baseline = session_open;
+            
             let eoh_pct = day.candles[start_idx..]
                 .iter()
-                .filter(|c| c.time <= eoh_time_str)
+                .take_while(|c| c.timestamp <= eoh_timestamp)
                 .last()
                 .map(|c| ((c.close - baseline) / baseline) * 100.0);
 
             let end_idx = if session.id == "LONDON_OPEN" {
+                let london_end_timestamp = day_start_timestamp + 33900;
                 day.candles.iter()
-                    .position(|c| c.time == "09:25:00")
+                    .position(|c| c.timestamp == london_end_timestamp)
                     .unwrap_or(day.candles.len() - 1)
             } else {
                 day.candles.len() - 1
             };
             let actual_end = if end_idx > start_idx { end_idx } else { day.candles.len() - 1 };
 
-            let baseline = session_open;
             let mut max_high = baseline;
             let mut min_low  = baseline;
             let last_close   = day.candles[actual_end].close;
@@ -224,8 +202,7 @@ impl SearchEngine<f32> {
             }
 
             outcomes.push(crate::models::MatchOutcome {
-                date: day.date.clone(),
-                time: day.candles[start_idx].time.clone(),
+                timestamp: day.candles[start_idx].timestamp,
                 distance: dist,
                 eod_ret_pct: ((last_close - baseline) / baseline) * 100.0,
                 mfe_pct: ((max_high - baseline) / baseline) * 100.0,

@@ -10,8 +10,7 @@ use crate::ai_provider::AiProvider;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RawCandle<T> {
-    pub date: String,
-    pub time: String,
+    pub timestamp: i64,
     pub open: T,
     pub high: T,
     pub low: T,
@@ -43,7 +42,7 @@ impl NormalizedCandle<f32> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoricalDay<T> {
-    pub date: String,
+    pub date: u32,
     pub candles: Vec<RawCandle<T>>, 
 }
 
@@ -66,8 +65,7 @@ pub struct QueryRequest<T> {
 }
 
 pub struct MatchOutcome {
-    pub date: String,
-    pub time: String,
+    pub timestamp: i64,
     pub distance: f32,
     pub eod_ret_pct: f32,
     pub mfe_pct: f32,
@@ -75,7 +73,7 @@ pub struct MatchOutcome {
     pub eoh_pct: f32,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 pub struct MatchesResponse {
     pub summary: AggregateData,
     pub matches: Vec<MatchResponse>,
@@ -98,8 +96,7 @@ impl From<CachedResult> for MatchesResponse {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MatchResponse {
-    pub date: String,
-    pub time: String,
+    pub timestamp: i64,
     pub similarity: f32,
     pub eos_pts: f32,
     pub up_pts: f32,
@@ -110,8 +107,7 @@ pub struct MatchResponse {
 impl From<HistoricalMatch> for MatchResponse {
     fn from(m: HistoricalMatch) -> Self {
         Self {
-            date: m.date,
-            time: "".to_string(), // O gestiscilo se serve
+            timestamp: m.timestamp as i64,
             similarity: m.match_score as f32,
             up_pts: m.up as f32,
             down_pts: m.down as f32,
@@ -121,7 +117,7 @@ impl From<HistoricalMatch> for MatchResponse {
     }
 }
 
-#[derive(serde::Serialize, Clone, Copy)]
+#[derive(Debug, serde::Serialize, Clone, Copy)]
 pub struct AggregateData {
     pub avg_up: f32,
     pub avg_down: f32,
@@ -141,7 +137,7 @@ pub struct AppState {
 
 #[derive(Debug, Serialize)]
 pub struct ChartDataResponse {
-    pub time: String,
+    pub timestamp: i64,
     pub open: f32,
     pub high: f32,
     pub low: f32,
@@ -211,12 +207,12 @@ pub struct CandleCacheKey {
 pub struct ContextCacheKey {
     pub asset: String,
     pub session_id: String, 
-    pub date: String,       
+    pub timestamp: i64,       
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct HistoricalMatch {
-    pub date: String,      
+    pub timestamp: i64,      
     pub match_score: f64,  
     pub up: f64,           
     pub down: f64,        
@@ -227,7 +223,7 @@ pub struct HistoricalMatch {
 impl From<MatchResponse> for HistoricalMatch {
     fn from(m: MatchResponse) -> Self {
         Self {
-            date: m.date,
+            timestamp: m.timestamp as i64,
             match_score: m.similarity as f64,
             up: m.up_pts as f64,
             down: m.down_pts as f64,
@@ -272,7 +268,7 @@ pub struct FullQueryRequest {
     pub timeframe: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug,Serialize)]
 pub struct FullResponse {
     pub summary: AggregateData,
     pub matches: Vec<MatchResponse>,
