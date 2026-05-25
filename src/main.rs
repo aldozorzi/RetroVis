@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let nq = thread::spawn(|| parser::load_and_process("data/nq-M5.csv", "NQ").map_err(|e| e.to_string()));
     let gc = thread::spawn(|| parser::load_and_process("data/gc-M5.csv", "GC").map_err(|e| e.to_string()));
     let ym = thread::spawn(|| parser::load_and_process("data/ym-M5.csv", "YM").map_err(|e| e.to_string()));
-
+    
     let nq_5m = nq.join().unwrap()?;
     let nq_15m = parser::resample(&nq_5m, 5, 15);
     engines.insert("NQ:M5".to_string(), SearchEngine::new(nq_5m));
