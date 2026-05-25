@@ -626,7 +626,7 @@ public class RetroVis : Indicator
                 if (matchClickAreas[i].Contains(e.Location))
                 {
                     string date = matchDates[i];
-                    string url = $"http://127.0.0.1:9999/visualize?symbol={ticker}&date={date}";
+                    string url = $"http://127.0.0.1:9999/visualize?symbol={ticker}&date={date}&timeframe={GetFormattedTimeframe()}";
                     
                     try
                     {

@@ -33,14 +33,24 @@ impl SearchEngine {
         current_pattern: &[NormalizedCandle<f32>],
         top_k: usize,
         session: &crate::models::SessionConfig,
+        timeframe: u32,
     ) -> Vec<crate::models::MatchOutcome> {
         let len = current_pattern.len();
         let mut outcomes = Vec::new();
         let session_offset_secs = Self::get_ny_seconds_for_session(session);
 
         for i in 0..self.dataset.len() {
-            let (_, candles) = match self.dataset.get(i) { Some(d) => d, None => continue };
-            if candles.is_empty() { continue; }
+            let (_, raw_day_candles) = match self.dataset.get(i) { Some(d) => d, None => continue };
+            if raw_day_candles.is_empty() { continue; }
+
+            // Genera il timeframe al volo se diverso da 5
+            let owned_candles;
+            let candles: &[RawCandle<f32>] = if timeframe == 5 {
+                raw_day_candles
+            } else {
+                owned_candles = crate::parser::resample_slice(raw_day_candles, timeframe);
+                &owned_candles
+            };
 
             let day_start_timestamp    = (candles[0].timestamp / 86400) * 86400;
             let target_start_timestamp = day_start_timestamp + session_offset_secs;
@@ -95,16 +105,41 @@ impl SearchEngine {
         outcomes.into_iter().take(top_k).collect()
     }
 
-    pub fn get_day_candles(&self, date: u32, include_prev: bool) -> Vec<crate::models::ChartDataResponse> {
-        let pos = match self.dataset.find_by_date(date) { Some(p) => p, None => return Vec::new() };
+    pub fn get_day_candles(&self, date: u32, timeframe_min: u32, include_prev: bool ) -> Vec<crate::models::ChartDataResponse> {
+        let pos = match self.dataset.find_by_date(date) { 
+        Some(p) => p, 
+        None => return Vec::new() 
+    };
 
-        let prev: &[RawCandle<f32>] = if include_prev && pos > 0 {
+        let raw_prev: &[RawCandle<f32>] = if include_prev && pos > 0 {
             self.dataset.get(pos - 1).map(|(_, c)| c).unwrap_or(&[])
         } else {
             &[]
         };
-        let (_, curr) = match self.dataset.get(pos) { Some(d) => d, None => return Vec::new() };
+        let (_, raw_curr) = match self.dataset.get(pos) { 
+            Some(d) => d, 
+            None => return Vec::new() 
+        };
 
+        // Resampling giorno precedente
+        let owned_prev;
+        let prev = if timeframe_min == 5 || raw_prev.is_empty() {
+            raw_prev
+        } else {
+            owned_prev = crate::parser::resample_slice(raw_prev, timeframe_min);
+            &owned_prev
+        };
+
+        // Resampling giorno corrente
+        let owned_curr;
+        let curr = if timeframe_min == 5 {
+            raw_curr
+        } else {
+            owned_curr = crate::parser::resample_slice(raw_curr, timeframe_min);
+            &owned_curr
+        };
+
+        // Unione e mappatura
         prev.iter().chain(curr.iter())
             .map(|c| crate::models::ChartDataResponse {
                 timestamp: c.timestamp,
@@ -114,11 +149,11 @@ impl SearchEngine {
     }
 
     pub fn find_context_matches(
-        &self,
-        current_context: &crate::models::Context,
-        top_k: usize,
-        session: &crate::models::SessionConfig,
-    ) -> Vec<crate::models::MatchOutcome> {
+    &self,
+    current_context: &crate::models::Context,
+    top_k: usize,
+    session: &crate::models::SessionConfig,
+) -> Vec<crate::models::MatchOutcome> {
         let mut outcomes = Vec::new();
         let session_offset_secs = Self::get_ny_seconds_for_session(session);
 
@@ -127,6 +162,7 @@ impl SearchEngine {
             let (_, prev_candles) = match self.dataset.get(i - 1) { Some(d) => d, None => continue };
             if candles.is_empty() { continue; }
 
+            // Usa direttamente i dati flat nativi a 5 minuti
             let day_start_timestamp    = (candles[0].timestamp / 86400) * 86400;
             let target_start_timestamp = day_start_timestamp + session_offset_secs;
 

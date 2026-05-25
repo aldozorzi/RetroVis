@@ -49,19 +49,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ym = thread::spawn(|| parser::load_and_process("data/ym-M5.csv", "YM").map_err(|e| e.to_string()));
     
     let nq_5m = nq.join().unwrap()?;
-    let nq_15m = parser::resample(&nq_5m, 15);
-    engines.insert("NQ:M5".to_string(), SearchEngine::new(nq_5m));
-    engines.insert("NQ:M15".to_string(), SearchEngine::new(nq_15m));
+    //let nq_15m = parser::resample(&nq_5m, 15);
+    engines.insert("NQ".to_string(), SearchEngine::new(nq_5m));
+    //engines.insert("NQ:M15".to_string(), SearchEngine::new(nq_15m));
 
     let gc_5m = gc.join().unwrap()?;
-    let gc_15m = parser::resample(&gc_5m, 15);
-    engines.insert("GC:M5".to_string(), SearchEngine::new(gc_5m));  
-    engines.insert("GC:M15".to_string(), SearchEngine::new(gc_15m));
+    //let gc_15m = parser::resample(&gc_5m, 15);
+    engines.insert("GC".to_string(), SearchEngine::new(gc_5m));  
+    //engines.insert("GC:M15".to_string(), SearchEngine::new(gc_15m));
 
     let ym_5m = ym.join().unwrap()?;
-    let ym_15m = parser::resample(&ym_5m, 15);
-    engines.insert("YM:M5".to_string(), SearchEngine::new(ym_5m));
-    engines.insert("YM:M15".to_string(), SearchEngine::new(ym_15m));
+    //let ym_15m = parser::resample(&ym_5m, 15);
+    engines.insert("YM".to_string(), SearchEngine::new(ym_5m));
+    //engines.insert("YM:M15".to_string(), SearchEngine::new(ym_15m));
 
     let mut sessions = HashMap::new();
     sessions.insert("LONDON_OPEN".to_string(), models::SessionConfig {
@@ -83,15 +83,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         broker.clone(), 
         cache.clone()
     ));
-
-    /*
-    let oanda_key = match env::var("OANDA_API_KEY") {
-        Ok(k) => k,
-        Err(_) => return Err("OANDA_API_KEY mancante".into()),
-    };
-    let oanda_url = env::var("OANDA_REST_URL").ok();
-    let oanda = Arc::new(oanda::OandaClient::new(oanda_key, oanda_url));
-    */
     
     let shared_state = Arc::new(AppState {
         engines,
@@ -128,341 +119,6 @@ async fn shutdown_signal() {
     println!("\nChiusura del server in corso...");
 }
 
-// MEtodo per ricerca completa con dati interni (oanda) invece che da client
-/*async fn full_search_handler(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<FullQueryRequest>,
-) -> impl IntoResponse {
-    let tf_sec = cache::RetroVisCache::timeframe_to_seconds(&req.timeframe);
-    let top_k_pattern = req.top_k.min(24);
-    let top_k_ctx = req.top_k.min(10);
-    let utc_ts = match full_search::ny_local_epoch_to_utc(req.timestamp) {
-        Some(dt) => dt.timestamp(),
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "timestamp NY non valido o inesistente (transizione DST)" })),
-            ).into_response();
-        }
-    };
-
-    let engine_key = format!("{}:{}", req.symbol, req.timeframe);
-    if state.engines.get(&engine_key).is_none() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "simbolo/timeframe non disponibile per il motore storico" })),
-        )
-            .into_response();
-    }
-
-    let min_bars = 450usize;
-    let candles = match state
-        .oanda
-        .fetch_candles_for_full_search(&req.symbol, &req.timeframe, utc_ts, min_bars)
-        .await
-    {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
-
-    let candles: Vec<RawCandle<f32>> = candles.into_iter().map(|mut c| {
-        c.open  = (c.open  * 4.0).round() / 4.0;
-        c.high  = (c.high  * 4.0).round() / 4.0;
-        c.low   = (c.low   * 4.0).round() / 4.0;
-        c.close = (c.close * 4.0).round() / 4.0;
-        c
-    }).collect();
-
-    let ref_idx = match full_search::find_reference_index(&candles, utc_ts, tf_sec) {
-        Ok(i) => i,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
-
-    let ref_start = match candle_start_utc_ny_row(&candles[ref_idx]) {
-        Ok(t) => t,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
-
-    let session_hint = match full_search::resolve_auto_session_id(ref_start) {
-        Some(s) => s,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "nessuna sessione attiva (AUTO) per questo istante" })),
-            )
-                .into_response();
-        }
-    };
-
-    let open_idx = match full_search::find_session_open_index_backward(&candles, ref_idx, session_hint, 200) {
-        Ok(i) => i,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
-
-    let open_start = match candle_start_utc_ny_row(&candles[open_idx]) {
-        Ok(t) => t,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
-
-    let effective_session = full_search::effective_session_from_open_bar(open_start);
-    let session_id = effective_session.to_string();
-
-    let pattern_end_idx = if ref_start.timestamp() == utc_ts {
-        (ref_idx + 1).min(candles.len())
-    } else {
-        ref_idx
-    };
-
-    let pattern = match full_search::pattern_candles_exclusive_ref(&candles, open_idx, pattern_end_idx) {
-        Ok(p) => p,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
-    /*
-    // DEBUG CANDELE SESSIONE PATTERN
-    for (i, c) in pattern.iter().enumerate() {
-        if let Ok(t) = candle_start_utc_ny_row(c) {
-            println!("[pattern {:>3}] UTC={} O={:.2} H={:.2} L={:.2} C={:.2}",
-                i, t.format("%Y-%m-%d %H:%M"), c.open, c.high, c.low, c.close);
-        }
-    }
-    println!("pattern len={}",
-        pattern.len());
-    // FINE DEBUG CANDELE SESSIONE PATTERN
-    // --------------------------------
-    */
-    if pattern.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "serve almeno una candela dopo l'apertura di sessione" })),
-        )
-            .into_response();
-    }
-
-    let session_open = candles[open_idx].open;
-    let last_pat_start = match candle_start_utc_ny_row(&pattern[pattern.len() - 1]) {
-        Ok(t) => t,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
-    // Ancoraggio cache come in Quantower: timestamp dell'ultima candela nel pattern (bar open UTC).
-    let search_anchor_ts = last_pat_start.timestamp();
-
-    let mut last_matches_response: Option<MatchesResponse> = None;
-    let timeframe_seconds = tf_sec;
-
-    for i in 1..=pattern.len() {
-        let historical_slice = &pattern[0..i];
-        let current_ts =
-            search_anchor_ts - ((pattern.len() - i) as i64 * timeframe_seconds);
-
-        let cached_res = state.cache.get_or_calculate_candle(
-            req.symbol.clone(),
-            req.timeframe.clone(),
-            session_id.clone(),
-            current_ts,
-            || {
-                let engine_key = format!("{}:{}", req.symbol, req.timeframe);
-                let engine = match state.engines.get(&engine_key) {
-                    Some(e) => e,
-                    None => {
-                        return CachedResult::from_aggregates(
-                            AggregateData {
-                                avg_up: 0.0,
-                                avg_down: 0.0,
-                                avg_eos: 0.0,
-                                avg_eoh: 0.0,
-                                edge_ratio: 0.0,
-                            },
-                            vec![],
-                        );
-                    }
-                };
-                let session = match state.sessions.get(&session_id) {
-                    Some(s) => s,
-                    None => {
-                        return CachedResult::from_aggregates(
-                            AggregateData {
-                                avg_up: 0.0,
-                                avg_down: 0.0,
-                                avg_eos: 0.0,
-                                avg_eoh: 0.0,
-                                edge_ratio: 0.0,
-                            },
-                            vec![],
-                        );
-                    }
-                };
-
-                let normalized: Vec<NormalizedCandle<f32>> = historical_slice
-                    .iter()
-                    .map(|raw| NormalizedCandle::from_raw(raw, session_open))
-                    .collect();
-
-                let matches = engine.find_matches(&normalized, top_k_pattern, session);
-                let (summary, custom_matches) = calculate_aggregates(&matches, session_open);
-
-                CachedResult::from_aggregates(summary, custom_matches)
-            },
-        );
-
-        last_matches_response = Some(MatchesResponse::from(cached_res));
-    }
-
-    let (summary, matches) = match last_matches_response {
-        Some(m) => (m.summary, m.matches),
-        None => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "nessun risultato pattern" })),
-            )
-                .into_response();
-        }
-    };
-
-    let ctx_inputs = match full_search::compute_context_inputs(&candles, open_idx, effective_session) {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
-
-    let ctx_date = ctx_inputs.context_cache_date;
-    let symbol = req.symbol.clone();
-
-    let context_cached = state.cache.get_or_calculate_context(&symbol, &session_id, ctx_date, || {
-        let engine_key = format!("{}:{}", req.symbol, req.timeframe);
-        let Some(engine) = state.engines.get(&engine_key) else {
-            return CachedResult::from_aggregates(
-                AggregateData {
-                    avg_up: 0.0,
-                    avg_down: 0.0,
-                    avg_eos: 0.0,
-                    avg_eoh: 0.0,
-                    edge_ratio: 0.0,
-                },
-                vec![],
-            );
-        };
-        let Some(session) = state.sessions.get(&session_id) else {
-            return CachedResult::from_aggregates(
-                AggregateData {
-                    avg_up: 0.0,
-                    avg_down: 0.0,
-                    avg_eos: 0.0,
-                    avg_eoh: 0.0,
-                    edge_ratio: 0.0,
-                },
-                vec![],
-            );
-        };
-
-        let current_context = Context::new(
-            ctx_inputs.session_open,
-            ctx_inputs.prev_close,
-            ctx_inputs.prev_high,
-            ctx_inputs.prev_low,
-            ctx_inputs.intraday_high,
-            ctx_inputs.intraday_low,
-        );
-
-        let matches = engine.find_context_matches(&current_context, top_k_ctx, session);
-        let (summary, custom_matches) = calculate_aggregates(&matches, ctx_inputs.session_open);
-        CachedResult::from_aggregates(summary, custom_matches)
-    });
-
-    let context_response = MatchesResponse::from(context_cached);
-
-    let last_close = pattern[pattern.len() - 1].close as f64;
-    let key = CandleCacheKey {
-        asset: req.symbol.clone(),
-        timeframe: req.timeframe.clone(),
-        session_id: session_id.clone(),
-        timestamp: search_anchor_ts,
-    };
-
-    let full_history = state.cache.get_session_history(
-        &req.symbol,
-        &req.timeframe,
-        &session_id,
-        search_anchor_ts,
-        pattern.len(),
-    );
-
-    let context_res = state
-        .cache
-        .get_context(&req.symbol, &session_id, ctx_date);
-
-    let ai_data = json!({
-        "symbol": req.symbol,
-        "session_id": session_id,
-        "current_price_action": last_close,
-        "evolution_history": full_history,
-        "context": context_res,
-        "session_open": session_open as f64,
-    });
-
-    let ai_analysis = match state.ai_service.get_analysis(key, ai_data).await {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("full-search AI: {}", e);
-            String::new()
-        }
-    };
-
-    Json(FullResponse {
-        summary,
-        matches,
-        context: context_response,
-        ai_analysis,
-    })
-    .into_response()
-}*/
-
 async fn search_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<QueryRequest<f32>>,
@@ -484,7 +140,7 @@ async fn search_handler(
     let mut last_result = None;
     let timeframe_seconds = crate::cache::RetroVisCache::timeframe_to_seconds(&req.timeframe);
 
-    let engine_key = format!("{}:{}", req.symbol, req.timeframe);
+    let engine_key = req.symbol.clone();
     let engine = state.engines.get(&engine_key).expect("Ticker not found");
     let session = state.sessions.get(&req.session_id).expect("Session not found");
 
@@ -499,16 +155,12 @@ async fn search_handler(
             current_ts,
             || {
 
-                /*let engine_key = format!("{}:{}", req.symbol, req.timeframe);
-                let engine = state.engines.get(&engine_key).expect("Engine not found");
-                let session = state.sessions.get(&req.session_id).expect("Session not found");*/
-
                 let normalized: Vec<NormalizedCandle<f32>> = historical_slice
                     .iter()
                     .map(|raw| NormalizedCandle::from_raw(raw, req.session_open))
                     .collect();
 
-                let matches = engine.find_matches(&normalized, req.top_k.min(10), session);
+                let matches = engine.find_matches(&normalized, req.top_k.min(10), session, (timeframe_seconds/60) as u32);
                 let (summary, custom_matches) = calculate_aggregates(&matches, req.session_open);
 
                 CachedResult::from_aggregates(summary, custom_matches)
@@ -577,19 +229,6 @@ pub async fn ai_analysis_handler(
     }
 }
 
-async fn day_details_handler(
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Json<Vec<models::ChartDataResponse>> {
-    let symbol = params.get("symbol").cloned().unwrap_or_else(|| "NQ".to_string());
-    let date_str = params.get("date").cloned().unwrap_or_default();
-    let date: u32 = date_str.parse().unwrap_or(0);
-    if let Some(engine) = state.engines.get(&format!("{}:M5", symbol)) {
-        return Json(engine.get_day_candles(date,true));
-    }
-
-    Json(vec![])
-}
 
 async fn context_matches_handler(
     State(state): State<Arc<AppState>>,
@@ -604,7 +243,7 @@ async fn context_matches_handler(
     let session_id = req.session_id.clone();
     let current_ts = chrono::Utc::now().timestamp();
 
-    let engine = state.engines.get(&format!("{}:M5", req.symbol)).expect("Ticker not found"); // M5 hardcodato perché il prezzo di apertura non cambia con il timeframe
+    let engine = state.engines.get(&req.symbol).expect("Ticker not found");
     let session = state.sessions.get(&req.session_id).expect("Session not found");
 
     let cached_res = state.cache.get_or_calculate_context(
@@ -681,6 +320,25 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
     )
 }
 
+async fn day_details_handler(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Json<Vec<models::ChartDataResponse>> {
+    let symbol = params.get("symbol").cloned().unwrap_or_else(|| "NQ".to_string());
+    let date_str = params.get("date").cloned().unwrap_or_default();
+    let date: u32 = date_str.replace('-', "").parse().unwrap_or(0);
+    let timeframe = params.get("timeframe").map(|s| s.as_str()).unwrap_or("M5");
+    let timeframe_seconds = crate::cache::RetroVisCache::timeframe_to_seconds(timeframe);
+    let timeframe_min = (timeframe_seconds / 60) as u32;
+
+    if let Some(engine) = state.engines.get(&symbol) {
+        return Json(engine.get_day_candles(date,timeframe_min, true));
+    }
+
+    Json(vec![])
+}
+
+
 async fn visualize_handler() -> Html<String> {
     Html(r#"
 <!DOCTYPE html>
@@ -701,6 +359,7 @@ async fn visualize_handler() -> Html<String> {
         const urlParams = new URLSearchParams(window.location.search);
         const dateParam = urlParams.get('date');
         const symbolParam = urlParams.get('symbol') || 'NQ';
+        const timeframeParam = urlParams.get('timeframe') || 'M5';
         
         if (dateParam) document.getElementById('info').innerText = `${symbolParam} - ${dateParam}`;
 
@@ -726,7 +385,8 @@ async fn visualize_handler() -> Html<String> {
             wickDownColor: '#ef5350'
         });
 
-        fetch(`/day-details?symbol=${symbolParam}&date=${dateParam}`)
+        console.log(`/day-details?symbol=${symbolParam}&date=${dateParam}&timeframe=${timeframeParam}`);
+        fetch(`/day-details?symbol=${symbolParam}&date=${dateParam}&timeframe=${timeframeParam}`)
             .then(res => res.json())
             .then(data => {
                 if (!data || data.length === 0) {
@@ -735,21 +395,14 @@ async fn visualize_handler() -> Html<String> {
                 }
                 
                 const formattedData = data.map(d => {
-
-                const parts = d.time.split(' ');
-                const datePart = parts[0]; // 2023-11-09
-                const timePart = parts[1]; // 09:30:00
-
-                const dt = new Date(`${datePart}T${timePart}Z`); 
-                
-                return {
-                    time: Math.floor(dt.getTime() / 1000), 
-                    open: d.open, 
-                    high: d.high, 
-                    low: d.low, 
-                    close: d.close
-                };
-            }).sort((a, b) => a.time - b.time);
+                    return {
+                        time: Number(d.timestamp), 
+                        open: d.open, 
+                        high: d.high, 
+                        low: d.low, 
+                        close: d.close
+                    };
+                }).sort((a, b) => a.time - b.time);
                 
                 candleSeries.setData(formattedData);
 

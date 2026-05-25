@@ -53,41 +53,35 @@ pub fn load_and_process(path: &str, symbol: &str) -> Result<CandleStore, Box<dyn
     Ok(CandleStore { candles, days })
 }
 
-pub fn resample(source: &CandleStore, to_min: u32) -> CandleStore {
+pub fn resample_slice(source_candles: &[RawCandle<f32>], to_min: u32) -> Vec<RawCandle<f32>> {
     let interval_secs = (to_min * 60) as i64;
-    let mut candles: Vec<RawCandle<f32>> = Vec::with_capacity(source.candles.len() / 3);
-    let mut days: Vec<(u32, std::ops::Range<usize>)> = Vec::with_capacity(source.days.len());
+    let mut resampled = Vec::with_capacity(source_candles.len() / 3 + 1);
+    let mut bucket: Option<RawCandle<f32>> = None;
 
-    for (date, range) in &source.days {
-        let day_start = candles.len();
-        let mut bucket: Option<RawCandle<f32>> = None;
-
-        for candle in &source.candles[range.clone()] {
-            let ts = (candle.timestamp / interval_secs) * interval_secs;
-            match &mut bucket {
-                Some(b) if b.timestamp == ts => {
-                    if candle.high > b.high { b.high = candle.high; }
-                    if candle.low  < b.low  { b.low  = candle.low;  }
-                    b.close    = candle.close;
-                    b._volume += candle._volume;
-                }
-                _ => {
-                    if let Some(b) = bucket.take() { candles.push(b); }
-                    bucket = Some(RawCandle {
-                        timestamp: ts,
-                        open: candle.open, high: candle.high,
-                        low:  candle.low,  close: candle.close,
-                        _volume: candle._volume,
-                    });
-                }
+    for candle in source_candles {
+        let ts = (candle.timestamp / interval_secs) * interval_secs;
+        match &mut bucket {
+            Some(b) if b.timestamp == ts => {
+                if candle.high > b.high { b.high = candle.high; }
+                if candle.low < b.low { b.low = candle.low; }
+                b.close = candle.close;
+                b._volume += candle._volume;
+            }
+            _ => {
+                if let Some(b) = bucket.take() { resampled.push(b); }
+                bucket = Some(RawCandle {
+                    timestamp: ts,
+                    open: candle.open,
+                    high: candle.high,
+                    low: candle.low,
+                    close: candle.close,
+                    _volume: candle._volume,
+                });
             }
         }
-        if let Some(b) = bucket { candles.push(b); }
-        if day_start < candles.len() {
-            days.push((*date, day_start..candles.len()));
-        }
     }
-    CandleStore { candles, days }
+    if let Some(b) = bucket { resampled.push(b); }
+    resampled
 }
 
 fn parse_f32(bytes: &[u8]) -> Option<f32> {
