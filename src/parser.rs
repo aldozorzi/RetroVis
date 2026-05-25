@@ -7,7 +7,7 @@ pub fn load_and_process(path: &str, symbol: &str) -> Result<CandleStore, Box<dyn
     let file = File::open(path)?;
     let mmap = unsafe { Mmap::map(&file)? };
 
-    let mut candles: Vec<RawCandle<f32>> = Vec::with_capacity(400_000);
+    let mut candles: Vec<RawCandle<f32>> = Vec::with_capacity(800_000);
     let mut days: Vec<(u32, std::ops::Range<usize>)> = Vec::with_capacity(5000);
     let mut current_date_num = 0u32;
     let mut day_start = 0usize;
@@ -16,8 +16,11 @@ pub fn load_and_process(path: &str, symbol: &str) -> Result<CandleStore, Box<dyn
 
     for i in 0..buffer.len() {
         if buffer[i] == b'\n' {
-            let line = &buffer[start..i];
+            let mut line = &buffer[start..i];
             start = i + 1;
+            if line.ends_with(b"\r") {
+                line = &line[..line.len() - 1];
+            }
             if line.is_empty() { continue; }
 
             let mut fields = line.split(|&b| b == b';');
@@ -27,14 +30,14 @@ pub fn load_and_process(path: &str, symbol: &str) -> Result<CandleStore, Box<dyn
             let high_bytes   = match fields.next() { Some(f) => f, None => continue };
             let low_bytes    = match fields.next() { Some(f) => f, None => continue };
             let close_bytes  = match fields.next() { Some(f) => f, None => continue };
-            let volume_bytes = match fields.next() { Some(f) => f, None => continue };
+            //let volume_bytes = match fields.next() { Some(f) => f, None => continue };
 
             let date_num  = match parse_date_to_u32(date_bytes) { Some(d) => d, None => continue };
             let open      = match parse_f32(open_bytes)   { Some(v) => v, None => continue };
             let high      = match parse_f32(high_bytes)   { Some(v) => v, None => continue };
             let low       = match parse_f32(low_bytes)    { Some(v) => v, None => continue };
             let close     = match parse_f32(close_bytes)  { Some(v) => v, None => continue };
-            let volume    = match parse_f32(volume_bytes) { Some(v) => v, None => continue };
+            //let volume    = match parse_f32(volume_bytes) { Some(v) => v, None => continue };
             let timestamp = calculate_timestamp(date_bytes, time_bytes);
 
             if current_date_num != 0 && date_num != current_date_num {
@@ -42,19 +45,20 @@ pub fn load_and_process(path: &str, symbol: &str) -> Result<CandleStore, Box<dyn
                 day_start = candles.len();
             }
             current_date_num = date_num;
-            candles.push(RawCandle { timestamp, open, high, low, close, _volume: volume });
+            candles.push(RawCandle { timestamp, open, high, low, close, /*_volume: volume */ });
         }
     }
     if day_start < candles.len() {
         days.push((current_date_num, day_start..candles.len()));
     }
-
+    candles.shrink_to_fit();
+    days.shrink_to_fit();
     println!("{} - {} giorni, {} candele", symbol, days.len(), candles.len());
     Ok(CandleStore { candles, days })
 }
 
 pub fn resample_slice(source_candles: &[RawCandle<f32>], to_min: u32) -> Vec<RawCandle<f32>> {
-    let interval_secs = (to_min * 60) as i64;
+    let interval_secs = (to_min * 60) as u32;
     let mut resampled = Vec::with_capacity(source_candles.len() / 3 + 1);
     let mut bucket: Option<RawCandle<f32>> = None;
 
@@ -65,7 +69,7 @@ pub fn resample_slice(source_candles: &[RawCandle<f32>], to_min: u32) -> Vec<Raw
                 if candle.high > b.high { b.high = candle.high; }
                 if candle.low < b.low { b.low = candle.low; }
                 b.close = candle.close;
-                b._volume += candle._volume;
+                //b._volume += candle._volume;
             }
             _ => {
                 if let Some(b) = bucket.take() { resampled.push(b); }
@@ -75,7 +79,7 @@ pub fn resample_slice(source_candles: &[RawCandle<f32>], to_min: u32) -> Vec<Raw
                     high: candle.high,
                     low: candle.low,
                     close: candle.close,
-                    _volume: candle._volume,
+                    /*_volume: candle._volume,*/
                 });
             }
         }
@@ -97,7 +101,7 @@ fn parse_date_to_u32(bytes: &[u8]) -> Option<u32> {
     Some(year * 10000 + month * 100 + day)
 }
 
-fn calculate_timestamp(date_bytes: &[u8], time_bytes: &[u8]) -> i64 {
+fn calculate_timestamp(date_bytes: &[u8], time_bytes: &[u8]) -> u32 {
     if date_bytes.len() < 10 || time_bytes.len() < 8 { return 0; }
 
     // Estrazione numerica della data (YYYY-MM-DD) convertendo in i64
@@ -123,5 +127,5 @@ fn calculate_timestamp(date_bytes: &[u8], time_bytes: &[u8]) -> i64 {
     let days_since_1970 = days_since_zero - 719468;
 
     // Conversione in secondi
-    (days_since_1970 * 86400) + (hour * 3600) + (minute * 60) + second
+    ((days_since_1970 * 86400) + (hour * 3600) + (minute * 60) + second) as u32
 }

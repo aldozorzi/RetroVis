@@ -10,11 +10,11 @@ impl SearchEngine {
         Self { dataset }
     }
 
-    fn get_ny_seconds_for_session(session: &crate::models::SessionConfig) -> i64 {
+    fn get_ny_seconds_for_session(session: &crate::models::SessionConfig) -> u32 {
         let hour   = session.start_time.hour()   as i64;
         let minute = session.start_time.minute() as i64;
         let second = session.start_time.second() as i64;
-        (hour * 3600) + (minute * 60) + second
+        ((hour * 3600) + (minute * 60) + second) as u32
     }
 
     fn calculate_distance(current: &[NormalizedCandle<f32>], historical: &[NormalizedCandle<f32>]) -> f32 {

@@ -11,12 +11,12 @@ use std::ops::Range;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RawCandle<T> {
-    pub timestamp: i64,
+    pub timestamp: u32,
     pub open: T,
     pub high: T,
     pub low: T,
     pub close: T,
-    pub _volume: T,
+    //pub _volume: T,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,13 +80,13 @@ pub struct QueryRequest<T> {
     pub session_id: String,
     pub candles: Vec<RawCandle<T>>,
     pub top_k: usize,
-    pub timestamp: i64,
+    pub timestamp: u32,
     pub timeframe: String,
     pub session_open: f32,
 }
 
 pub struct MatchOutcome {
-    pub timestamp: i64,
+    pub timestamp: u32,
     pub distance: f32,
     pub eod_ret_pct: f32,
     pub mfe_pct: f32,
@@ -117,7 +117,7 @@ impl From<CachedResult> for MatchesResponse {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MatchResponse {
-    pub timestamp: i64,
+    pub timestamp: u32,
     pub similarity: f32,
     pub eos_pts: f32,
     pub up_pts: f32,
@@ -128,7 +128,7 @@ pub struct MatchResponse {
 impl From<HistoricalMatch> for MatchResponse {
     fn from(m: HistoricalMatch) -> Self {
         Self {
-            timestamp: m.timestamp as i64,
+            timestamp: m.timestamp as u32,
             similarity: m.match_score as f32,
             up_pts: m.up as f32,
             down_pts: m.down as f32,
@@ -158,7 +158,7 @@ pub struct AppState {
 
 #[derive(Debug, Serialize)]
 pub struct ChartDataResponse {
-    pub timestamp: i64,
+    pub timestamp: u32,
     pub open: f32,
     pub high: f32,
     pub low: f32,
@@ -221,19 +221,19 @@ pub struct CandleCacheKey {
     pub asset: String,
     pub timeframe: String,
     pub session_id: String, 
-    pub timestamp: i64, 
+    pub timestamp: u32, 
 }
 
 #[derive(Hash, PartialEq, Eq, Clone)]
 pub struct ContextCacheKey {
     pub asset: String,
     pub session_id: String, 
-    pub timestamp: i64,       
+    pub timestamp: u32,       
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct HistoricalMatch {
-    pub timestamp: i64,      
+    pub timestamp: u32,      
     pub match_score: f64,  
     pub up: f64,           
     pub down: f64,        
@@ -244,7 +244,7 @@ pub struct HistoricalMatch {
 impl From<MatchResponse> for HistoricalMatch {
     fn from(m: MatchResponse) -> Self {
         Self {
-            timestamp: m.timestamp as i64,
+            timestamp: m.timestamp as u32,
             match_score: m.similarity as f64,
             up: m.up_pts as f64,
             down: m.down_pts as f64,
@@ -285,7 +285,7 @@ pub struct FullQueryRequest {
     /// Pattern search depth; capped at 24 for this endpoint.
     pub top_k: usize,
     /// Unix timestamp (UTC) of the reference candle, aligned with `QueryRequest.timestamp`.
-    pub timestamp: i64,
+    pub timestamp: u32,
     pub timeframe: String,
 }
 
@@ -302,7 +302,7 @@ pub struct AiAnalysisRequest {
     pub symbol: String,
     pub session_id: String,
     pub candles_len: usize,
-    pub timestamp: i64,
+    pub timestamp: u32,
     pub timeframe: String,
     pub current_price_action: f64,
     pub session_open: f64,

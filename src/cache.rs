@@ -20,7 +20,7 @@ impl RetroVisCache {
         &self, 
         asset: &str, 
         session_id: &str, 
-        timestamp: i64, 
+        timestamp: u32, 
         calc_fn: F
     ) -> CachedResult 
     where 
@@ -41,7 +41,7 @@ impl RetroVisCache {
         &self, 
         asset: &str, 
         session_id: &str, 
-        timestamp: i64
+        timestamp: u32
     ) -> Option<CachedResult> { // Restituisce Option perché il dato potrebbe non esserci
         let key = ContextCacheKey {
             asset: asset.to_string(),
@@ -60,7 +60,7 @@ impl RetroVisCache {
         asset: String,
         timeframe: String,
         session_id: String,
-        timestamp: i64,
+        timestamp: u32,
         calc_fn: F,
     ) -> CachedResult
     where
@@ -84,19 +84,19 @@ impl RetroVisCache {
         asset: &str,
         tf: &str,
         session_id: &str,
-        current_ts: i64,
+        current_ts: u32,
         limit: usize,
     ) -> Vec<CachedResult> {
         let mut history = Vec::new();
         let step: i64 = Self::timeframe_to_seconds(tf); 
 
         for i in 0..limit {
-            let target_ts = current_ts - (i as i64 * step);
+            let target_ts = current_ts as i64 - (i as i64 * step);
             let key = CandleCacheKey {
                 asset: asset.to_string(),
                 timeframe: tf.to_string(),
                 session_id: session_id.to_string(),
-                timestamp: target_ts,
+                timestamp: target_ts as u32,
             };
 
             if let Some(res) = self.candle_results.get(&key) {

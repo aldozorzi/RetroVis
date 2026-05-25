@@ -146,13 +146,13 @@ async fn search_handler(
 
     for i in 1..=req.candles.len() {
         let historical_slice = &req.candles[0..i];
-        let current_ts = req.timestamp - ((req.candles.len() - i) as i64 * timeframe_seconds);
+        let current_ts = req.timestamp as i64 - ((req.candles.len() - i) as i64 * timeframe_seconds);
 
         let cached_res = state.cache.get_or_calculate_candle(
             req.symbol.clone(),
             req.timeframe.clone(),
             req.session_id.clone(),
-            current_ts,
+            current_ts as u32,
             || {
 
                 let normalized: Vec<NormalizedCandle<f32>> = historical_slice
@@ -194,7 +194,7 @@ pub async fn ai_analysis_handler(
         req.candles_len
     );
 
-    let timestamp = req.timestamp as i64;
+    let timestamp = req.timestamp as u32;
 
     let context_res = state.cache.get_context(
         &req.symbol,
@@ -241,7 +241,7 @@ async fn context_matches_handler(
     */
     let symbol = req.symbol.clone();
     let session_id = req.session_id.clone();
-    let current_ts = chrono::Utc::now().timestamp();
+    let current_ts = chrono::Utc::now().timestamp() as u32;
 
     let engine = state.engines.get(&req.symbol).expect("Ticker not found");
     let session = state.sessions.get(&req.session_id).expect("Session not found");
