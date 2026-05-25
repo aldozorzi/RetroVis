@@ -4,7 +4,7 @@ use axum::{
     Json,
     Router,
     response::{Html, IntoResponse},
-    http::StatusCode,
+    //http::StatusCode,
 };
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -24,13 +24,14 @@ mod gemini;
 //mod ollama;
 mod determination_engine;
 mod ai_analysis;
-mod oanda;
-mod full_search;
+//mod oanda;
+//mod full_search;
 mod ai_provider;
+mod http_client;
 
-use models::{QueryRequest,AppState,MatchesResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey,AiAnalysisService,FullQueryRequest,FullResponse, RawCandle};
+use models::{QueryRequest,AppState,MatchesResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey,AiAnalysisService/*,FullQueryRequest,FullResponse, RawCandle*/};
 use crate::ai_provider::AiProvider;
-use crate::oanda::candle_start_utc_ny_row;
+//use crate::oanda::candle_start_utc_ny_row;
 use gemini::GeminiBroker;
 //use claude::ClaudeBroker;
 //use ollama::OllamaBroker;
@@ -83,25 +84,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cache.clone()
     ));
 
+    /*
     let oanda_key = match env::var("OANDA_API_KEY") {
         Ok(k) => k,
         Err(_) => return Err("OANDA_API_KEY mancante".into()),
     };
     let oanda_url = env::var("OANDA_REST_URL").ok();
     let oanda = Arc::new(oanda::OandaClient::new(oanda_key, oanda_url));
-
+    */
+    
     let shared_state = Arc::new(AppState {
         engines,
         sessions,
         cache,
         broker: broker,
         ai_service: ai_service,
-        oanda,
+        //oanda,
     });
 
     let app = Router::new()
         .route("/search", post(search_handler))
-        .route("/full-search", post(full_search_handler))
+        //.route("/full-search", post(full_search_handler))
         .route("/day-details", get(day_details_handler))
         .route("/visualize", get(visualize_handler))
         .route("/context-search", post(context_matches_handler))
@@ -126,7 +129,7 @@ async fn shutdown_signal() {
 }
 
 // MEtodo per ricerca completa con dati interni (oanda) invece che da client
-async fn full_search_handler(
+/*async fn full_search_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<FullQueryRequest>,
 ) -> impl IntoResponse {
@@ -458,7 +461,7 @@ async fn full_search_handler(
         ai_analysis,
     })
     .into_response()
-}
+}*/
 
 async fn search_handler(
     State(state): State<Arc<AppState>>,

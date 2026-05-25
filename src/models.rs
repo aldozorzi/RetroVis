@@ -132,7 +132,7 @@ pub struct AppState {
     pub cache: Arc<crate::cache::RetroVisCache>,
     pub broker: Arc<dyn AiProvider>,
     pub ai_service: Arc<AiAnalysisService>,
-    pub oanda: Arc<crate::oanda::OandaClient>,
+    // pub oanda: Arc<crate::oanda::OandaClient>,
 }
 
 #[derive(Debug, Serialize)]
@@ -257,7 +257,7 @@ impl CachedResult {
         }
     }
 }
-
+/*
 #[derive(Debug, Deserialize)]
 pub struct FullQueryRequest {
     pub symbol: String,
@@ -275,7 +275,7 @@ pub struct FullResponse {
     pub context: MatchesResponse,
     pub ai_analysis: String,
 }
-
+*/
 #[derive(serde::Deserialize)]
 pub struct AiAnalysisRequest {
     pub symbol: String,

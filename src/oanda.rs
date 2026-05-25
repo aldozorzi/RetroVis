@@ -4,7 +4,8 @@ use std::time::Duration;
 use chrono::{DateTime, SecondsFormat, /*TimeZone,*/ Utc};
 use chrono_tz::America::New_York;
 use dashmap::DashMap;
-use reqwest::StatusCode;
+use http::StatusCode;
+use url::Url;
 use serde::Deserialize;
 
 use crate::cache::RetroVisCache;
@@ -27,7 +28,7 @@ const DEFAULT_REST_URL: &str = "https://api-fxpractice.oanda.com";
 pub struct OandaClient {
     api_key: String,
     base_url: String,
-    http: reqwest::Client,
+    http: crate::http_client::HttpClient,
     response_cache: Arc<DashMap<String, Vec<RawCandle<f32>>>>,
 }
 
@@ -36,10 +37,7 @@ impl OandaClient {
         Self {
             api_key,
             base_url: base_url.unwrap_or_else(|| DEFAULT_REST_URL.to_string()),
-            http: reqwest::Client::builder()
-                .timeout(Duration::from_secs(60))
-                .build()
-                .expect("reqwest client"),
+            http: crate::http_client::HttpClient::new(Duration::from_secs(60)),
             response_cache: Arc::new(DashMap::new()),
         }
     }
@@ -85,7 +83,7 @@ impl OandaClient {
             self.base_url.trim_end_matches('/'),
             instrument
         );
-        let mut url = reqwest::Url::parse(&base).map_err(|e| OandaError::Http(e.to_string()))?;
+        let mut url = Url::parse(&base).map_err(|e| OandaError::Http(e.to_string()))?;
         {
             let mut pairs = url.query_pairs_mut();
             pairs.append_pair("price", "M");
