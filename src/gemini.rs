@@ -54,7 +54,7 @@ impl AiProvider for GeminiBroker {
 
             let resp = self.http_client
             .post(&url)
-            .json(&payload)
+            .body(serde_json::to_string(&payload).map_err(|e| e.to_string())?)
             .timeout(Duration::from_secs(15))
             .send()
             .await;
@@ -63,7 +63,8 @@ impl AiProvider for GeminiBroker {
                 Ok(r) => { 
                     let status = r.status();
                     if status.is_success() {
-                        let json = r.json::<Value>().await.map_err(|e| format!("JSON_PARSE_ERR: {}", e))?;
+                        let text = r.text().await.map_err(|e| format!("HTTP_TEXT_ERR: {}", e))?;
+                        let json: Value = serde_json::from_str(&text).map_err(|e| format!("JSON_PARSE_ERR: {}", e))?;
                         
                         let full_text = json["candidates"][0]["content"]["parts"][0]["text"]
                             .as_str()

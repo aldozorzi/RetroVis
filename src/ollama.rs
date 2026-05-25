@@ -22,23 +22,28 @@ impl OllamaBroker {
 impl AiProvider for OllamaBroker {
     async fn request_analysis(&self, data: Value) -> Result<String, String> {
         let client = reqwest::Client::new();
+        /*
         println!("Sending request to Ollama for symbol: {:?}", data["symbol"].as_str().unwrap_or("N/A"));
         println!("Payload: {}", data);
         println!("System Prompt: {}", self.system_prompt());
+        */
+        let payload = serde_json::json!({
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": self.system_prompt()},
+                {"role": "user", "content": data.to_string()}
+            ],
+            "temperature": 0.1
+        });
+
         let response = client.post(&self.endpoint)
-            .json(&serde_json::json!({
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": self.system_prompt()},
-                    {"role": "user", "content": data.to_string()}
-                ],
-                "temperature": 0.1 // Teniamola bassa per evitare allucinazioni sui numeri
-            }))
+            .body(payload.to_string())
             .send()
             .await
             .map_err(|e| e.to_string())?;
 
-        let res_json: Value = response.json().await.map_err(|e| e.to_string())?;
+        let text = response.text().await.map_err(|e| e.to_string())?;
+        let res_json: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
         
         res_json["choices"][0]["message"]["content"]
             .as_str()

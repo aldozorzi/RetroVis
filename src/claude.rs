@@ -52,7 +52,7 @@ impl AiProvider for ClaudeBroker {
                 .header("x-api-key", &self.api_key)
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
-                .json(&payload)
+                .body(serde_json::to_string(&payload)?)
                 .timeout(Duration::from_secs(15))
                 .send()
                 .await;
@@ -61,7 +61,8 @@ impl AiProvider for ClaudeBroker {
                 Ok(r) => { 
                     let status = r.status();
                     if status.is_success() {
-                        let json = r.json::<Value>().await.map_err(|e| format!("JSON_PARSE_ERR: {}", e))?;
+                        let text = r.text().await.map_err(|e| format!("HTTP_TEXT_ERR: {}", e))?;
+                        let json: Value = serde_json::from_str(&text).map_err(|e| format!("JSON_PARSE_ERR: {}", e))?;
                         
                         // Parsing del blocco di risposta di Anthropic: content[0].text
                         let full_text = json["content"][0]["text"]
