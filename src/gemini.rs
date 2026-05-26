@@ -51,7 +51,6 @@ impl AiProvider for GeminiBroker {
         for (attempt, delay) in backoffs.iter().enumerate() {
             println!("REQ | Symbol: {} | Attempt: {}", symbol, attempt + 1);
 
-            // UNICA DIFFERENZA: post_raw invece di .post().body().timeout().send()
             let resp = self.http_client
                 .post_raw(&url, &[], body.clone(), Duration::from_secs(15))
                 .await;
