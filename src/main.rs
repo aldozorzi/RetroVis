@@ -29,7 +29,7 @@ mod ai_analysis;
 mod ai_provider;
 mod http_client;
 
-use models::{QueryRequest,AppState,MatchesResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey,AiAnalysisService/*,FullQueryRequest,FullResponse, RawCandle*/};
+use models::{QueryRequest,AppState,MatchesResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey,AiAnalysisService, RawCandle};
 use crate::ai_provider::AiProvider;
 //use crate::oanda::candle_start_utc_ny_row;
 use gemini::GeminiBroker;
@@ -123,84 +123,57 @@ async fn search_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<QueryRequest<f32>>,
 ) -> Json<MatchesResponse> {
-    /*
-    // --- LOG DI DEBUG ---
-    println!("--- NUOVA RICHIESTA RICEVUTA ---");
-    println!("Simbolo: {}", req.symbol);
-    println!("Sessione: {}", req.session_id);
-    println!("Numero candele inviate: {}", req.candles.len());
-    println!("Span: {} - {}", req.candles.first().unwrap().timestamp, req.candles.last().unwrap().timestamp);
-    
-    if let Some(first) = req.candles.first() {
-        println!("Prima candela inviata: {}", first.timestamp);
-    }
-    // --------------------
-    */
+    let history = compute_candle_history(
+        &state, &req.symbol, &req.timeframe, &req.session_id,
+        req.timestamp, &req.candles, req.session_open, req.top_k,
+    );
+    Json(MatchesResponse::from(history.into_iter().last().expect("No candles provided")))
+}
 
-    let mut last_result = None;
-    let timeframe_seconds = crate::cache::RetroVisCache::timeframe_to_seconds(&req.timeframe);
-
-    let engine_key = req.symbol.clone();
-    let engine = state.engines.get(&engine_key).expect("Ticker not found");
-    let session = state.sessions.get(&req.session_id).expect("Session not found");
-
-    for i in 1..=req.candles.len() {
-        let historical_slice = &req.candles[0..i];
-        let current_ts = req.timestamp as i64 - ((req.candles.len() - i) as i64 * timeframe_seconds);
-
-        let cached_res = state.cache.get_or_calculate_candle(
-            req.symbol.clone(),
-            req.timeframe.clone(),
-            req.session_id.clone(),
-            current_ts as u32,
-            || {
-
-                let normalized: Vec<NormalizedCandle<f32>> = historical_slice
-                    .iter()
-                    .map(|raw| NormalizedCandle::from_raw(raw, req.session_open))
-                    .collect();
-
-                let matches = engine.find_matches(&normalized, req.top_k.min(10), session, (timeframe_seconds/60) as u32);
-                let (summary, custom_matches) = calculate_aggregates(&matches, req.session_open);
-
-                CachedResult::from_aggregates(summary, custom_matches)
-            }
-        );
-
-        last_result = Some(cached_res);
-    }
-    let response = MatchesResponse::from(last_result.expect("No candles provided"));
-    //println!("--- DEBUG MATCHES RESPONSE ---\n{:#?}", response);
-    Json(response)
+async fn context_matches_handler(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ContextQueryRequest>,
+) -> Json<MatchesResponse> {
+    let result = compute_context(
+        &state, &req.symbol, &req.session_id,
+        req.timestamp,          // era Utc::now() — bug corretto
+        req.session_open, req.prev_close, req.prev_high,
+        req.prev_low, req.intraday_high, req.intraday_low,
+        req.top_k,
+    );
+    Json(MatchesResponse::from(result))
 }
 
 pub async fn ai_analysis_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AiAnalysisRequest>,
 ) -> impl IntoResponse {
-
     let key = CandleCacheKey {
         asset: req.symbol.clone(),
         timeframe: req.timeframe.clone(),
-        session_id: req.session_id.clone(),
         timestamp: req.timestamp,
     };
 
-    let full_history = state.cache.get_session_history(
-        &req.symbol,
-        &req.timeframe,
-        &req.session_id,
-        req.timestamp,
-        req.candles_len
-    );
-
-    let timestamp = req.timestamp as u32;
-
-    let context_res = state.cache.get_context(
-        &req.symbol,
-        &req.session_id,
-        timestamp
-    );
+    // Cache-aside: usa la cache se disponibile, altrimenti calcola autonomamente
+    let full_history = {
+        let h = state.cache.get_session_history(
+            &req.symbol, &req.timeframe, req.timestamp, req.candles.len()
+        );
+        if h.is_empty() {
+            compute_candle_history(
+                &state, &req.symbol, &req.timeframe, &req.session_id,
+                req.timestamp, &req.candles, req.session_open as f32, req.top_k,
+            )
+        } else { h }
+    };
+    let context_res = match state.cache.get_context(&req.symbol, &req.session_id, req.timestamp) {
+        Some(c) => c,
+        None => compute_context(
+            &state, &req.symbol, &req.session_id, req.timestamp,
+            req.session_open as f32, req.prev_close, req.prev_high,
+            req.prev_low, req.intraday_high, req.intraday_low, req.top_k,
+        ),
+    };
 
     let ai_data = json!({
         "symbol": req.symbol,
@@ -211,60 +184,74 @@ pub async fn ai_analysis_handler(
         "session_open": req.session_open,
     });
 
-    // Delegate the analysis to the AiAnalysisService, which will handle caching, coalescing and provider calls internally.
     match state.ai_service.get_analysis(key, ai_data).await {
-        Ok(analysis) => {
-            Json(json!({ 
-                "status": "success", 
-                "analysis": analysis 
-            }))
-        },
+        Ok(analysis) => Json(json!({ "status": "success", "analysis": analysis })),
         Err(e) => {
-            eprintln!("Errore durante l'analisi AI: {}", e);
-            Json(json!({ 
-                "status": "error", 
-                "message": format!("Errore analisi: {}", e) 
-            }))
+            eprintln!("Errore analisi AI: {}", e);
+            Json(json!({ "status": "error", "message": format!("Errore analisi: {}", e) }))
         }
     }
 }
 
+fn compute_candle_history(
+    state: &AppState,
+    symbol: &str,
+    timeframe: &str,
+    session_id: &str,
+    timestamp: u32,
+    candles: &[RawCandle<f32>],
+    session_open: f32,
+    top_k: usize,
+) -> Vec<CachedResult> {
+    let timeframe_seconds = crate::cache::RetroVisCache::timeframe_to_seconds(timeframe);
+    let engine  = state.engines.get(symbol).expect("Ticker not found");
+    let session = state.sessions.get(session_id).expect("Session not found");
 
-async fn context_matches_handler(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<ContextQueryRequest>,
-) -> Json<MatchesResponse> {
-    /*
-    println!(">>> /context_matches ricevuto: symbol={}, session={}", req.symbol, req.session_id);
-    println!("    session_open={}, prev_close={}, prev_high={}, prev_low={}", req.session_open, req.prev_close, req.prev_high, req.prev_low);
-    println!("    intraday_high={}, intraday_low={}", req.intraday_high, req.intraday_low);
-    */
-    let symbol = req.symbol.clone();
-    let session_id = req.session_id.clone();
-    let current_ts = chrono::Utc::now().timestamp() as u32;
+    (1..=candles.len()).map(|i| {
+        let slice      = &candles[0..i];
+        let current_ts = timestamp as i64 - ((candles.len() - i) as i64 * timeframe_seconds);
 
-    let engine = state.engines.get(&req.symbol).expect("Ticker not found");
-    let session = state.sessions.get(&req.session_id).expect("Session not found");
+        state.cache.get_or_calculate_candle(
+            symbol.to_string(), timeframe.to_string(),
+            current_ts as u32,
+            || {
+                let normalized: Vec<NormalizedCandle<f32>> = slice.iter()
+                    .map(|raw| NormalizedCandle::from_raw(raw, session_open))
+                    .collect();
+                let matches = engine.find_matches(
+                    &normalized, top_k.min(10), session, (timeframe_seconds / 60) as u32
+                );
+                let (summary, custom_matches) = calculate_aggregates(&matches, session_open);
+                CachedResult::from_aggregates(summary, custom_matches)
+            }
+        )
+    }).collect()
+}
 
-    let cached_res = state.cache.get_or_calculate_context(
-        &symbol, 
-        &session_id, 
-        current_ts, 
-        || {
-            let current_context = Context::new(
-                req.session_open, req.prev_close, req.prev_high, 
-                req.prev_low, req.intraday_high, req.intraday_low,
-            );
+fn compute_context(
+    state: &AppState,
+    symbol: &str,
+    session_id: &str,
+    timestamp: u32,
+    session_open: f32,
+    prev_close: f32,
+    prev_high: f32,
+    prev_low: f32,
+    intraday_high: f32,
+    intraday_low: f32,
+    top_k: usize,
+) -> CachedResult {
+    let engine  = state.engines.get(symbol).expect("Ticker not found");
+    let session = state.sessions.get(session_id).expect("Session not found");
 
-            let matches = engine.find_context_matches(&current_context, req.top_k.min(10), session);
-
-            let (summary, custom_matches) = calculate_aggregates(&matches, req.session_open);
-
-            CachedResult::from_aggregates(summary, custom_matches)
-        }
-    );
-
-    Json(MatchesResponse::from(cached_res))
+    state.cache.get_or_calculate_context(symbol, session_id, timestamp, || {
+        let ctx = Context::new(
+            session_open, prev_close, prev_high, prev_low, intraday_high, intraday_low,
+        );
+        let matches = engine.find_context_matches(&ctx, top_k.min(10), session);
+        let (summary, custom_matches) = calculate_aggregates(&matches, session_open);
+        CachedResult::from_aggregates(summary, custom_matches)
+    })
 }
 
 fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (AggregateData, Vec<MatchResponse>) {

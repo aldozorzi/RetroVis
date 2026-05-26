@@ -2,10 +2,9 @@ use dashmap::DashMap;
 use crate::models::{CachedResult, CandleCacheKey, ContextCacheKey};
 
 pub struct RetroVisCache {
-    // Risultati delle singole candele (la storia della sessione)
     pub candle_results: DashMap<CandleCacheKey, CachedResult>,
-    // Risultato del contesto (fisso per asset/sessione/giorno)
     pub context_results: DashMap<ContextCacheKey, CachedResult>,
+    last_eviction: std::sync::atomic::AtomicU32,
 }
 
 impl RetroVisCache {
@@ -13,6 +12,7 @@ impl RetroVisCache {
         Self {
             candle_results: DashMap::new(),
             context_results: DashMap::new(),
+            last_eviction: std::sync::atomic::AtomicU32::new(0),
         }
     }
 
@@ -42,7 +42,8 @@ impl RetroVisCache {
         asset: &str, 
         session_id: &str, 
         timestamp: u32
-    ) -> Option<CachedResult> { // Restituisce Option perché il dato potrebbe non esserci
+    ) -> Option<CachedResult> { 
+        self.evict_if_new_day();
         let key = ContextCacheKey {
             asset: asset.to_string(),
             session_id: session_id.to_string(),
@@ -59,17 +60,16 @@ impl RetroVisCache {
         &self,
         asset: String,
         timeframe: String,
-        session_id: String,
         timestamp: u32,
         calc_fn: F,
     ) -> CachedResult
     where
         F: FnOnce() -> CachedResult,
     {
+        self.evict_if_new_day();
         let key = CandleCacheKey {
             asset,
             timeframe,
-            session_id,
             timestamp,
         };
 
@@ -83,7 +83,6 @@ impl RetroVisCache {
         &self,
         asset: &str,
         tf: &str,
-        session_id: &str,
         current_ts: u32,
         limit: usize,
     ) -> Vec<CachedResult> {
@@ -95,7 +94,6 @@ impl RetroVisCache {
             let key = CandleCacheKey {
                 asset: asset.to_string(),
                 timeframe: tf.to_string(),
-                session_id: session_id.to_string(),
                 timestamp: target_ts as u32,
             };
 
@@ -105,6 +103,25 @@ impl RetroVisCache {
         }
         history.reverse();
         history
+    }
+
+    fn evict_if_new_day(&self) {
+        let today_start = chrono::Utc::now()
+            .date_naive()
+            .and_hms_opt(0, 0, 0).unwrap()
+            .and_utc()
+            .timestamp() as u32;
+
+        // carica il valore attuale senza lock
+        let last = self.last_eviction.load(std::sync::atomic::Ordering::Relaxed);
+
+        if last < today_start {
+            // nuovo giorno — aggiorna il marker ed esegui la pulizia
+            self.last_eviction.store(today_start, std::sync::atomic::Ordering::Relaxed);
+            self.candle_results.retain(|k, _| k.timestamp >= today_start);
+            self.context_results.retain(|k, _| k.timestamp >= today_start);
+            println!("CACHE EVICT | nuovo giorno, sessioni precedenti rimosse");
+        }
     }
 
     pub fn get_ai_analysis(&self, key: &CandleCacheKey) -> Option<String> {

@@ -206,6 +206,7 @@ impl Context {
 #[derive(Debug, Deserialize)]
 pub struct ContextQueryRequest {
     pub symbol: String,
+    pub timestamp: u32, 
     pub session_id: String,
     pub session_open: f32,
     pub prev_close: f32,
@@ -220,7 +221,6 @@ pub struct ContextQueryRequest {
 pub struct CandleCacheKey {
     pub asset: String,
     pub timeframe: String,
-    pub session_id: String, 
     pub timestamp: u32, 
 }
 
@@ -278,34 +278,22 @@ impl CachedResult {
         }
     }
 }
-/*
-#[derive(Debug, Deserialize)]
-pub struct FullQueryRequest {
-    pub symbol: String,
-    /// Pattern search depth; capped at 24 for this endpoint.
-    pub top_k: usize,
-    /// Unix timestamp (UTC) of the reference candle, aligned with `QueryRequest.timestamp`.
-    pub timestamp: u32,
-    pub timeframe: String,
-}
 
-#[derive(Debug,Serialize)]
-pub struct FullResponse {
-    pub summary: AggregateData,
-    pub matches: Vec<MatchResponse>,
-    pub context: MatchesResponse,
-    pub ai_analysis: String,
-}
-*/
 #[derive(serde::Deserialize)]
 pub struct AiAnalysisRequest {
     pub symbol: String,
     pub session_id: String,
-    pub candles_len: usize,
+    pub candles: Vec<RawCandle<f32>>,
     pub timestamp: u32,
     pub timeframe: String,
     pub current_price_action: f64,
     pub session_open: f64,
+    pub prev_close: f32,
+    pub prev_high: f32,
+    pub prev_low: f32,
+    pub intraday_high: f32,
+    pub intraday_low: f32,
+    pub top_k: usize,
 }
 
 pub struct AiAnalysisService {

@@ -14,8 +14,10 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using TradingPlatform.BusinessLayer;
 using TradingPlatform.BusinessLayer.Chart;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 [SupportedOSPlatform("windows")]
+
 public class RetroVis : Indicator
 {
     #region Parameters
@@ -197,7 +199,7 @@ public class RetroVis : Indicator
             
             string json = JsonSerializer.Serialize(request);
             // Log("request timestamp:" + finalTimestamp);
-            Log("request json:" + json);
+            //Log("request json:" + json);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
             var response = await httpClient.PostAsync(SearchUrl, content);
             //Log(response.ToString());
@@ -222,19 +224,27 @@ public class RetroVis : Indicator
         {
             var lastCandle = candles[candles.Count - 1];
             long finalTimestamp = lastCandle.Timestamp;
-            var request = new AiAnalysisQueryRequest
+            ContextQueryRequest contextData = BuildContextQueryRequest();
+            var request = new AiAnalysisRequest
             {
 
                 Symbol = ticker,
                 SessionId = effectiveSession,
-                CandlesLen = candles.Count,
+                Candles = candles,
                 Timeframe = GetFormattedTimeframe(),
                 Timestamp = finalTimestamp,
                 CurrentPriceAction = lastCandle.Close,
-                SessionOpen = (float)currentPriceBase,
+                SessionOpen = contextData.SessionOpen,
+                PrevClose = contextData.PrevClose,
+                PrevHigh = contextData.PrevHigh,
+                PrevLow = contextData.PrevLow,
+                IntradayHigh = contextData.IntradayHigh,
+                IntradayLow = contextData.IntradayLow,
+                TopK = contextData.TopK
             };
             //Log("CurrentPriceAction: " + request.CurrentPriceAction);
             string json = JsonSerializer.Serialize(request);
+            Log("AI json:" + json);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
             var response = await httpClient.PostAsync($"{ServerUrl.TrimEnd('/')}/get-ai-analysis", content);
             if (response.IsSuccessStatusCode)
@@ -250,85 +260,91 @@ public class RetroVis : Indicator
         catch (Exception ex) { Log("AI Analysis Error: " + ex.Message); }
     }
 
+    private ContextQueryRequest BuildContextQueryRequest()
+    {
+        int closeHour, closeMinute;
+        TimeZoneInfo sessionTz;
+
+        if (effectiveSession == "NY_OPEN")
+        {
+            closeHour = 17;
+            closeMinute = 0;
+            sessionTz = NyTz;
+        }
+        else if (effectiveSession == "LONDON_OPEN")
+        {
+            closeHour = 17;
+            closeMinute = 0;
+            sessionTz = LondonTz;
+        }
+        else
+        {
+            closeHour = 17;
+            closeMinute = 0;
+            sessionTz = NyTz;
+        }
+
+        float sessionOpen = (float)Open(openBarIndex);
+
+        float intradayHigh = sessionOpen;
+        float intradayLow = sessionOpen;
+        DateTime openBarDate = TimeZoneInfo.ConvertTimeFromUtc(Time(openBarIndex).ToUniversalTime(), NyTz).Date;
+
+        for (int i = openBarIndex + 1; i < Math.Min(Count, openBarIndex + 72); i++)
+        {
+            DateTime barNy = TimeZoneInfo.ConvertTimeFromUtc(Time(i).ToUniversalTime(), NyTz);
+            if (barNy.Date != openBarDate) break;
+            if ((float)High(i) > intradayHigh) intradayHigh = (float)High(i);
+            if ((float)Low(i) < intradayLow) intradayLow = (float)Low(i);
+        }
+
+        float prevClose = 0, prevHigh = float.MinValue, prevLow = float.MaxValue;
+        bool foundPrevDay = false;
+
+        DateTime currentSessionOpen = new DateTime(openBarDate.Year, openBarDate.Month, openBarDate.Day, closeHour, closeMinute, 0);
+
+        DateTime prevSessionEnd = new DateTime(PrevTradingDay(currentSessionOpen).Year, PrevTradingDay(currentSessionOpen).Month, PrevTradingDay(currentSessionOpen).Day, closeHour, closeMinute, 0);
+        DateTime prevSessionStart = new DateTime(PrevTradingDay(prevSessionEnd).Year, PrevTradingDay(prevSessionEnd).Month, PrevTradingDay(prevSessionEnd).Day, closeHour, closeMinute, 0);
+
+        for (int i = openBarIndex + 1; i < Math.Min(Count, openBarIndex + 1000); i++)
+        {
+            DateTime barNy = TimeZoneInfo.ConvertTimeFromUtc(Time(i).ToUniversalTime(), NyTz);
+
+            if (barNy >= prevSessionEnd) continue;   
+            if (barNy < prevSessionStart) break;  
+
+            if (!foundPrevDay)
+            {
+                prevClose = (float)Close(i);
+                foundPrevDay = true;
+            }
+            if ((float)High(i) > prevHigh) prevHigh = (float)High(i);
+            if ((float)Low(i) < prevLow) prevLow = (float)Low(i);
+        }
+
+        long openTimestamp = new DateTimeOffset(Time(openBarIndex)).ToUnixTimeSeconds();
+
+        var request = new ContextQueryRequest
+        {
+            Symbol = ticker,
+            SessionId = effectiveSession,
+            SessionOpen = sessionOpen,
+            PrevClose = prevClose,
+            PrevHigh = prevHigh,
+            PrevLow = prevLow,
+            IntradayHigh = intradayHigh,
+            IntradayLow = intradayLow,
+            TopK = 5,
+            Timestamp = openTimestamp
+        };
+        return request;
+    }
+
     private async Task FetchContextMatchesAsync(int openBarIndex)
     {
         try
         {
-            int closeHour, closeMinute;
-            TimeZoneInfo sessionTz;
-
-            if (effectiveSession == "NY_OPEN")
-            {
-                closeHour = 17;
-                closeMinute = 0;
-                sessionTz = NyTz;
-            }
-            else if (effectiveSession == "LONDON_OPEN")
-            {
-                closeHour = 17;
-                closeMinute = 0;
-                sessionTz = LondonTz;
-            }
-            else
-            {
-                closeHour = 17;
-                closeMinute = 0;
-                sessionTz = NyTz;
-            }
-
-            float sessionOpen = (float)Open(openBarIndex);
-
-            float intradayHigh = sessionOpen;
-            float intradayLow = sessionOpen;
-            DateTime openBarDate = TimeZoneInfo.ConvertTimeFromUtc(Time(openBarIndex).ToUniversalTime(), NyTz).Date;
-
-            for (int i = openBarIndex + 1; i < Math.Min(Count, openBarIndex + 72); i++)
-            {
-                DateTime barNy = TimeZoneInfo.ConvertTimeFromUtc(Time(i).ToUniversalTime(), NyTz);
-                if (barNy.Date != openBarDate) break;
-                if ((float)High(i) > intradayHigh) intradayHigh = (float)High(i);
-                if ((float)Low(i) < intradayLow) intradayLow = (float)Low(i);
-            }
-
-            float prevClose = 0, prevHigh = float.MinValue, prevLow = float.MaxValue;
-            bool foundPrevDay = false;
-
-            DateTime currentSessionOpen = new DateTime(openBarDate.Year, openBarDate.Month, openBarDate.Day, closeHour, closeMinute, 0);
-
-            DateTime prevSessionEnd = new DateTime(PrevTradingDay(currentSessionOpen).Year, PrevTradingDay(currentSessionOpen).Month, PrevTradingDay(currentSessionOpen).Day, closeHour, closeMinute, 0);
-            DateTime prevSessionStart = new DateTime(PrevTradingDay(prevSessionEnd).Year, PrevTradingDay(prevSessionEnd).Month, PrevTradingDay(prevSessionEnd).Day, closeHour, closeMinute, 0);
-
-            //Log("prevSessionEnd: "+ prevSessionEnd+ " - prevSessionStart:" + prevSessionStart);
-
-            for (int i = openBarIndex + 1; i < Math.Min(Count, openBarIndex + 1000); i++)
-            {
-                DateTime barNy = TimeZoneInfo.ConvertTimeFromUtc(Time(i).ToUniversalTime(), NyTz);
-
-                if (barNy >= prevSessionEnd) continue;   // ancora nella sessione corrente
-                if (barNy < prevSessionStart) break;      // troppo indietro, usciamo
-
-                if (!foundPrevDay)
-                {
-                    prevClose = (float)Close(i);
-                    foundPrevDay = true;
-                }
-                if ((float)High(i) > prevHigh) prevHigh = (float)High(i);
-                if ((float)Low(i) < prevLow) prevLow = (float)Low(i);
-            }
-            if (!foundPrevDay) return;
-
-            var request = new ContextQueryRequest
-            {
-                Symbol = ticker,
-                SessionId = effectiveSession,
-                SessionOpen = sessionOpen,
-                PrevClose = prevClose,
-                PrevHigh = prevHigh,
-                PrevLow = prevLow,
-                IntradayHigh = intradayHigh,
-                IntradayLow = intradayLow,
-                TopK = 5
-            };
+            ContextQueryRequest request = BuildContextQueryRequest();
 
             string json = JsonSerializer.Serialize(request);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -843,28 +859,7 @@ public class RetroVis : Indicator
     } 
 
     #region Models
-    public class QueryRequest
-    {
-        [JsonPropertyName("symbol")] public string Symbol { get; set; }
-        [JsonPropertyName("session_id")] public string SessionId { get; set; }
-        [JsonPropertyName("candles")] public List<RawCandle> Candles { get; set; }
-        [JsonPropertyName("top_k")] public int TopK { get; set; }
-        [JsonPropertyName("timestamp")] public long Timestamp { get; set; }
-        [JsonPropertyName("timeframe")] public string Timeframe { get; set; }
-        [JsonPropertyName("session_open")] public float SessionOpen { get; set; }
-    }
-
-    public class AiAnalysisQueryRequest
-    {
-
-        [JsonPropertyName("symbol")] public string Symbol { get; set; }
-        [JsonPropertyName("session_id")] public string SessionId { get; set; }
-        [JsonPropertyName("candles_len")] public int CandlesLen { get; set; }
-        [JsonPropertyName("timestamp")] public long Timestamp { get; set; }
-        [JsonPropertyName("timeframe")] public string Timeframe { get; set; }
-        [JsonPropertyName("current_price_action")] public float CurrentPriceAction { get; set; }
-        [JsonPropertyName("session_open")] public float SessionOpen { get; set; }
-    }
+    
 
     public class RawCandle
     {
@@ -903,10 +898,39 @@ public class RetroVis : Indicator
 
         [JsonPropertyName("eoh_pts")] public float EohPts { get; set; }
     }
+    public class QueryRequest
+    {
+        [JsonPropertyName("symbol")] public string Symbol { get; set; }
+        [JsonPropertyName("session_id")] public string SessionId { get; set; }
+        [JsonPropertyName("candles")] public List<RawCandle> Candles { get; set; }
+        [JsonPropertyName("top_k")] public int TopK { get; set; }
+        [JsonPropertyName("timestamp")] public long Timestamp { get; set; }
+        [JsonPropertyName("timeframe")] public string Timeframe { get; set; }
+        [JsonPropertyName("session_open")] public float SessionOpen { get; set; }
+    }
     public class ContextQueryRequest
     {
         [JsonPropertyName("symbol")] public string Symbol { get; set; }
         [JsonPropertyName("session_id")] public string SessionId { get; set; }
+        [JsonPropertyName("session_open")] public float SessionOpen { get; set; }
+        [JsonPropertyName("prev_close")] public float PrevClose { get; set; }
+        [JsonPropertyName("prev_high")] public float PrevHigh { get; set; }
+        [JsonPropertyName("prev_low")] public float PrevLow { get; set; }
+        [JsonPropertyName("intraday_high")] public float IntradayHigh { get; set; }
+        [JsonPropertyName("intraday_low")] public float IntradayLow { get; set; }
+        [JsonPropertyName("top_k")] public int TopK { get; set; }
+        [JsonPropertyName("timestamp")] public long Timestamp { get; set; }
+    }
+
+    public class AiAnalysisRequest
+    {
+
+        [JsonPropertyName("symbol")] public string Symbol { get; set; }
+        [JsonPropertyName("session_id")] public string SessionId { get; set; }
+        [JsonPropertyName("candles")] public List<RawCandle> Candles { get; set; }
+        [JsonPropertyName("timestamp")] public long Timestamp { get; set; }
+        [JsonPropertyName("timeframe")] public string Timeframe { get; set; }
+        [JsonPropertyName("current_price_action")] public float CurrentPriceAction { get; set; }
         [JsonPropertyName("session_open")] public float SessionOpen { get; set; }
         [JsonPropertyName("prev_close")] public float PrevClose { get; set; }
         [JsonPropertyName("prev_high")] public float PrevHigh { get; set; }
