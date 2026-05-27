@@ -1,5 +1,6 @@
 use dashmap::DashMap;
 use crate::models::{CachedResult, CandleCacheKey, ContextCacheKey};
+use std::sync::Arc;
 
 pub struct RetroVisCache {
     pub candle_results: DashMap<CandleCacheKey, CachedResult>,
@@ -125,12 +126,14 @@ impl RetroVisCache {
     }
 
     pub fn get_ai_analysis(&self, key: &CandleCacheKey) -> Option<String> {
-        self.candle_results.get(key).and_then(|entry| entry.ai_analysis.clone())
+        self.candle_results.get(key).and_then(|entry| {
+            entry.ai_analysis.as_ref().map(|arc_str| (**arc_str).clone())
+        })
     }
 
     pub fn save_ai_analysis(&self, key: &CandleCacheKey, analysis: String) {
         if let Some(mut entry) = self.candle_results.get_mut(key) {
-            entry.ai_analysis = Some(analysis);
+            entry.ai_analysis = Some(Arc::new(analysis));
         }
     }
 

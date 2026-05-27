@@ -109,7 +109,7 @@ impl From<CachedResult> for MatchesResponse {
                 edge_ratio: cached.edge_ratio as f32,
                 avg_eoh: cached.avg_eoh as f32,
             },
-            matches: cached.matches.into_iter().map(MatchResponse::from).collect(),
+            matches: cached.matches.iter().cloned().map(MatchResponse::from).collect(),
         }
     }
 }
@@ -231,7 +231,7 @@ pub struct ContextCacheKey {
     pub timestamp: u32,       
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct HistoricalMatch {
     pub timestamp: u32,      
     pub match_score: f64,  
@@ -260,20 +260,23 @@ pub struct CachedResult {
     pub avg_eos: f64,
     pub avg_up: f64,
     pub avg_down: f64,
-    pub matches: Vec<HistoricalMatch>,
-    pub ai_analysis: Option<String>,
+    pub matches: Arc<Vec<HistoricalMatch>>,
+    pub ai_analysis: Option<Arc<String>>,
     pub avg_eoh: f64,
 }
 
 impl CachedResult {
     pub fn from_aggregates(summary: AggregateData, matches: Vec<MatchResponse>) -> Self {
+
+        let historical_matches: Vec<HistoricalMatch> = matches.into_iter().map(HistoricalMatch::from).collect();
+
         Self {
             edge_ratio: summary.edge_ratio as f64,
             avg_eos: summary.avg_eos as f64,
             avg_up: summary.avg_up as f64,
             avg_down: summary.avg_down as f64,
             avg_eoh: summary.avg_eoh as f64,
-            matches: matches.into_iter().map(HistoricalMatch::from).collect(),
+            matches: Arc::new(historical_matches),
             ai_analysis: None,
         }
     }
