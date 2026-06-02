@@ -160,10 +160,10 @@ impl DeterminationEngine {
 
         // 4. Exhaustion Check against Cleaned Averages
         if bias == "LONG" {
-            println!("Session Open: {}, Current Price Action: {}", session_open, current_price_action);
+            //println!("Session Open: {}, Current Price Action: {}", session_open, current_price_action);
             let target = session_open + candle_metrics.avg_up;
             let stop_loss = session_open - candle_metrics.avg_down;
-            println!("Target: {}, Stop Loss: {}", target, stop_loss);
+            // println!("Target: {}, Stop Loss: {}", target, stop_loss);
             // Calcola il rischio e il rendimento potenziale dal prezzo corrente
             let potential_reward = target - current_price_action;
             let potential_risk = current_price_action - stop_loss;

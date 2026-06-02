@@ -1,5 +1,7 @@
 use crate::models::{CandleStore, NormalizedCandle, RawCandle};
-use chrono::Timelike;
+use chrono::{Timelike, TimeZone};
+use chrono_tz::America::New_York;
+use std::str::FromStr;
 
 pub struct SearchEngine {
     pub dataset: CandleStore,
@@ -10,11 +12,26 @@ impl SearchEngine {
         Self { dataset }
     }
 
-    fn get_ny_seconds_for_session(session: &crate::models::SessionConfig) -> u32 {
-        let hour   = session.start_time.hour()   as i64;
-        let minute = session.start_time.minute() as i64;
-        let second = session.start_time.second() as i64;
-        ((hour * 3600) + (minute * 60) + second) as u32
+    fn get_ny_seconds_for_session(session: &crate::models::SessionConfig, current_date: chrono::NaiveDate) -> u32 {
+
+        let session_tz = chrono_tz::Tz::from_str(&session.timezone)
+            .unwrap_or(chrono_tz::Europe::London);
+
+        // Use the actual processing date to dynamic calculate DST shifts
+        let session_datetime = current_date.and_time(session.start_time);
+
+        let localized_session = match session_tz.from_local_datetime(&session_datetime).single() {
+            Some(dt) => dt,
+            None => return 0, 
+        };
+
+        let datetime_in_ny = localized_session.with_timezone(&New_York);
+
+        let hour   = datetime_in_ny.hour()   as u32;
+        let minute = datetime_in_ny.minute() as u32;
+        let second = datetime_in_ny.second() as u32;
+
+        (hour * 3600) + (minute * 60) + second
     }
 
     fn calculate_distance(current: &[NormalizedCandle<f32>], historical: &[NormalizedCandle<f32>]) -> f32 {
@@ -37,7 +54,12 @@ impl SearchEngine {
     ) -> Vec<crate::models::MatchOutcome> {
         let len = current_pattern.len();
         let mut outcomes = Vec::new();
-        let session_offset_secs = Self::get_ny_seconds_for_session(session);
+
+        //Extract the actual calendar date from the first candle
+        let current_dt = New_York.timestamp_opt(current_pattern[0].timestamp as i64, 0).unwrap();
+        let current_date = current_dt.date_naive();
+
+        let session_offset_secs = Self::get_ny_seconds_for_session(session, current_date);
 
         for i in 0..self.dataset.len() {
             let (_, raw_day_candles) = match self.dataset.get(i) { Some(d) => d, None => continue };
@@ -52,11 +74,18 @@ impl SearchEngine {
                 &owned_candles
             };
 
-            let day_start_timestamp    = (candles[0].timestamp / 86400) * 86400;
+            let day_start_timestamp    = candles[0].timestamp;
             let target_start_timestamp = day_start_timestamp + session_offset_secs;
 
-            let Ok(start_idx) = candles.binary_search_by_key(&target_start_timestamp, |c| c.timestamp) else {
-                continue;
+            let start_idx = match candles.binary_search_by_key(&target_start_timestamp, |c| c.timestamp) {
+                Ok(idx) => idx,
+                Err(idx) => {
+                    if idx < candles.len() {
+                        idx
+                    } else {
+                        continue;
+                    }
+                }
             };
             if candles.len() < start_idx + len { continue; }
 
@@ -153,78 +182,89 @@ impl SearchEngine {
     current_context: &crate::models::Context,
     top_k: usize,
     session: &crate::models::SessionConfig,
+    timestamp: u32,
 ) -> Vec<crate::models::MatchOutcome> {
-        let mut outcomes = Vec::new();
-        let session_offset_secs = Self::get_ny_seconds_for_session(session);
+    let mut outcomes = Vec::new();
 
-        for i in 1..self.dataset.len() {
-            let (_, candles)      = match self.dataset.get(i)     { Some(d) => d, None => continue };
-            let (_, prev_candles) = match self.dataset.get(i - 1) { Some(d) => d, None => continue };
-            if candles.is_empty() { continue; }
+    let current_dt = New_York.timestamp_opt(timestamp as i64, 0).unwrap();
+    let current_date = current_dt.date_naive();
 
-            // Usa direttamente i dati flat nativi a 5 minuti
-            let day_start_timestamp    = (candles[0].timestamp / 86400) * 86400;
-            let target_start_timestamp = day_start_timestamp + session_offset_secs;
+    let session_offset_secs = Self::get_ny_seconds_for_session(session, current_date);
 
-            let Ok(start_idx) = candles.binary_search_by_key(&target_start_timestamp, |c| c.timestamp) else {
-                continue;
-            };
+    for i in 1..self.dataset.len() {
+        let (_, candles)      = match self.dataset.get(i)     { Some(d) => d, None => continue };
+        let (_, prev_candles) = match self.dataset.get(i - 1) { Some(d) => d, None => continue };
+        if candles.is_empty() { continue; }
 
-            let prev_close = match prev_candles.last() { Some(c) => c.close, None => continue };
-            let prev_high  = prev_candles.iter().map(|c| c.high).fold(f32::NEG_INFINITY, f32::max);
-            let prev_low   = prev_candles.iter().map(|c| c.low).fold(f32::INFINITY,     f32::min);
+        let day_start_timestamp = candles[0].timestamp;
+        let target_start_timestamp = day_start_timestamp + session_offset_secs;
 
-            let (intraday_high, intraday_low) = if start_idx == 0 {
-                let open = candles[0].open;
-                (open, open)
-            } else {
-                let h = candles[0..start_idx].iter().map(|c| c.high).fold(f32::NEG_INFINITY, f32::max);
-                let l = candles[0..start_idx].iter().map(|c| c.low).fold(f32::INFINITY,     f32::min);
-                (h, l)
-            };
-
-            let session_open = candles[start_idx].open;
-            let hist_context = crate::models::Context::new(
-                session_open, prev_close, prev_high, prev_low, intraday_high, intraday_low,
-            );
-
-            let dist          = current_context.distance(&hist_context);
-            let baseline      = session_open;
-            let eoh_timestamp = target_start_timestamp + 3600;
-
-            let eoh_pct = candles[start_idx..]
-                .iter()
-                .take_while(|c| c.timestamp <= eoh_timestamp)
-                .last()
-                .map(|c| ((c.close - baseline) / baseline) * 100.0);
-
-            let end_idx = if session.id == "LONDON_OPEN" {
-                let london_end = day_start_timestamp + 33900;
-                candles.iter().position(|c| c.timestamp == london_end).unwrap_or(candles.len() - 1)
-            } else {
-                candles.len() - 1
-            };
-            let actual_end = if end_idx > start_idx { end_idx } else { candles.len() - 1 };
-
-            let mut max_high = baseline;
-            let mut min_low  = baseline;
-            let last_close   = candles[actual_end].close;
-            for c in &candles[start_idx..=actual_end] {
-                if c.high > max_high { max_high = c.high; }
-                if c.low  < min_low  { min_low  = c.low;  }
+        let start_idx = match candles.binary_search_by_key(&target_start_timestamp, |c| c.timestamp) {
+            Ok(idx) => idx,
+            Err(idx) => {
+                if idx < candles.len() {
+                    idx
+                } else {
+                    continue;
+                }
             }
+        };
 
-            outcomes.push(crate::models::MatchOutcome {
-                timestamp:   candles[start_idx].timestamp,
-                distance:    dist,
-                eod_ret_pct: ((last_close - baseline) / baseline) * 100.0,
-                mfe_pct:     ((max_high   - baseline) / baseline) * 100.0,
-                mae_pct:     ((min_low    - baseline) / baseline) * 100.0,
-                eoh_pct:     eoh_pct.unwrap_or(0.0),
-            });
+        let prev_close = match prev_candles.last() { Some(c) => c.close, None => continue };
+        let prev_high  = prev_candles.iter().map(|c| c.high).fold(f32::NEG_INFINITY, f32::max);
+        let prev_low   = prev_candles.iter().map(|c| c.low).fold(f32::INFINITY,     f32::min);
+
+        let (intraday_high, intraday_low) = if start_idx == 0 {
+            let open = candles[0].open;
+            (open, open)
+        } else {
+            let h = candles[0..start_idx].iter().map(|c| c.high).fold(f32::NEG_INFINITY, f32::max);
+            let l = candles[0..start_idx].iter().map(|c| c.low).fold(f32::INFINITY,     f32::min);
+            (h, l)
+        };
+
+        let session_open = candles[start_idx].open;
+        let hist_context = crate::models::Context::new(
+            session_open, prev_close, prev_high, prev_low, intraday_high, intraday_low,
+        );
+
+        let dist          = current_context.distance(&hist_context);
+        let baseline      = session_open;
+        let eoh_timestamp = target_start_timestamp + 3600;
+
+        let eoh_pct = candles[start_idx..]
+            .iter()
+            .take_while(|c| c.timestamp <= eoh_timestamp)
+            .last()
+            .map(|c| ((c.close - baseline) / baseline) * 100.0);
+
+        let end_idx = if session.id == "LONDON_OPEN" {
+            let london_end = day_start_timestamp + 33900;
+            candles.iter().position(|c| c.timestamp == london_end).unwrap_or(candles.len() - 1)
+        } else {
+            candles.len() - 1
+        };
+        let actual_end = if end_idx > start_idx { end_idx } else { candles.len() - 1 };
+
+        let mut max_high = baseline;
+        let mut min_low  = baseline;
+        let last_close   = candles[actual_end].close;
+        for c in &candles[start_idx..=actual_end] {
+            if c.high > max_high { max_high = c.high; }
+            if c.low  < min_low  { min_low  = c.low;  }
         }
 
-        outcomes.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
-        outcomes.into_iter().take(top_k).collect()
+        outcomes.push(crate::models::MatchOutcome {
+            timestamp:   candles[start_idx].timestamp,
+            distance:    dist,
+            eod_ret_pct: ((last_close - baseline) / baseline) * 100.0,
+            mfe_pct:     ((max_high   - baseline) / baseline) * 100.0,
+            mae_pct:     ((min_low    - baseline) / baseline) * 100.0,
+            eoh_pct:     eoh_pct.unwrap_or(0.0),
+        });
     }
+
+    outcomes.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+    outcomes.into_iter().take(top_k).collect()
+}
 }

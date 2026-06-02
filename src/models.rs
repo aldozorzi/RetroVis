@@ -25,6 +25,7 @@ pub struct NormalizedCandle<T> {
     pub wick_up_pct: T,
     pub wick_down_pct: T,
     pub range_pct: T,
+    pub timestamp: u32
 }
 
 impl NormalizedCandle<f32> {
@@ -37,6 +38,7 @@ impl NormalizedCandle<f32> {
             wick_up_pct: ((raw.high - max_oc) / baseline) * 100.0,
             wick_down_pct: ((min_oc - raw.low) / baseline) * 100.0,
             range_pct: ((raw.high - raw.low) / baseline) * 100.0,
+            timestamp: raw.timestamp,
         }
     }
 }

@@ -248,7 +248,10 @@ fn compute_context(
         let ctx = Context::new(
             session_open, prev_close, prev_high, prev_low, intraday_high, intraday_low,
         );
-        let matches = engine.find_context_matches(&ctx, top_k.min(10), session);
+        /*println!("Calcolo contesto per {} - {} at {}: session_open={}, prev_close={}, prev_high={}, prev_low={}, intraday_high={}, intraday_low={}",
+            symbol, session_id, timestamp, session_open, prev_close, prev_high, prev_low, intraday_high, intraday_low
+        );*/
+        let matches = engine.find_context_matches(&ctx, top_k.min(10), session, timestamp);
         let (summary, custom_matches) = calculate_aggregates(&matches, session_open);
         CachedResult::from_aggregates(summary, custom_matches)
     })
