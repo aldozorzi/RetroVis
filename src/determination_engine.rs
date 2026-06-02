@@ -26,7 +26,7 @@ impl DeterminationEngine {
 
         CleanedMetrics {
             avg_up: Self::mean(&clean_up),
-            avg_down: Self::mean(&clean_down),
+            avg_down: Self::mean(&clean_down).abs(),
         }
     }
 
@@ -52,6 +52,8 @@ impl DeterminationEngine {
     pub fn evaluate(session_data: &Value) -> (String, String, String, String) {
         let mut candle_edge = 0.0;
         let mut current_move = 0.0;
+        let mut session_open = 0.0;
+        let mut current_price_action = 0.0;
         let mut candle_matches = &Value::Null;
 
         if let Some(evolutions) = session_data["evolution_history"].as_array() {
@@ -62,8 +64,8 @@ impl DeterminationEngine {
                 
                 candle_edge = if avg_up >= avg_down { edge_raw.abs() } else { -edge_raw.abs() };
                 
-                let current_price_action = session_data["current_price_action"].as_f64().unwrap_or(0.0);
-                let session_open = session_data["session_open"].as_f64().unwrap_or(0.0);
+                current_price_action = session_data["current_price_action"].as_f64().unwrap_or(0.0);
+                session_open = session_data["session_open"].as_f64().unwrap_or(0.0);
                 current_move = current_price_action - session_open;
                 
                 candle_matches = &latest["matches"];
@@ -104,7 +106,7 @@ impl DeterminationEngine {
         }
 
         let outlier_prefix = if total_outliers > 0 {
-            format!("There are {} outliers across datasets. ", total_outliers)
+            format!("{} outlier(s) across datasets. ", total_outliers)
         } else {
             "".to_string()
         };
@@ -157,21 +159,59 @@ impl DeterminationEngine {
         }
 
         // 4. Exhaustion Check against Cleaned Averages
-        if bias == "LONG" && current_move >= candle_metrics.avg_up {
-            return (
-                "MONITOR".to_string(),
-                bias,
-                "Exhaustion Risk".to_string(),
-                format!("{}Cleaned upside distribution target achieved.", outlier_prefix)
-            );
-        }
-        if bias == "SHORT" && current_move <= candle_metrics.avg_down {
-            return (
-                "MONITOR".to_string(),
-                bias,
-                "Exhaustion Risk".to_string(),
-                format!("{}Cleaned downside distribution target achieved.", outlier_prefix)
-            );
+        if bias == "LONG" {
+            println!("Session Open: {}, Current Price Action: {}", session_open, current_price_action);
+            let target = session_open + candle_metrics.avg_up;
+            let stop_loss = session_open - candle_metrics.avg_down;
+            println!("Target: {}, Stop Loss: {}", target, stop_loss);
+            // Calcola il rischio e il rendimento potenziale dal prezzo corrente
+            let potential_reward = target - current_price_action;
+            let potential_risk = current_price_action - stop_loss;
+
+            // Verifica se siamo sotto 1:1 RR o se il target è già stato raggiunto
+            if current_move >= candle_metrics.avg_up {
+                return (
+                    "MONITOR".to_string(),
+                    bias,
+                    "Exhaustion Risk".to_string(),
+                    format!("{}Upside distribution target achieved", outlier_prefix)
+                );
+            }
+            println!("Potential Reward: {}, Potential Risk: {}", potential_reward, potential_risk);
+            if potential_reward < potential_risk {
+                return (
+                    "MONITOR".to_string(),
+                    bias,
+                    "Exhaustion Risk".to_string(),
+                    format!("{}Risk Reward ratio unfavorable.", outlier_prefix)
+                );
+            }
+        } else if bias == "SHORT" {
+            let target = session_open - candle_metrics.avg_down;
+            let stop_loss = session_open + candle_metrics.avg_up;
+
+            // Calcola il rischio e il rendimento potenziale dal prezzo corrente
+            let potential_reward = current_price_action - target;
+            let potential_risk = stop_loss - current_price_action;
+
+            // Verifica se siamo sotto 1:1 RR o se il target è già stato raggiunto
+            if current_move <= candle_metrics.avg_down {
+                return (
+                    "MONITOR".to_string(),
+                    bias,
+                    "Exhaustion Risk".to_string(),
+                    format!("{}Downside distribution target achieved", outlier_prefix)
+                );
+            }
+
+            if potential_reward < potential_risk {
+                return (
+                    "MONITOR".to_string(),
+                    bias,
+                    "Exhaustion Risk".to_string(),
+                    format!("{}Risk Reward ratio unfavorable.", outlier_prefix)
+                );
+            }
         }
 
         (
