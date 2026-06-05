@@ -121,7 +121,7 @@ impl RetroVisCache {
             self.last_eviction.store(today_start, std::sync::atomic::Ordering::Relaxed);
             self.candle_results.retain(|k, _| k.timestamp >= today_start);
             self.context_results.retain(|k, _| k.timestamp >= today_start);
-            println!("CACHE EVICT | nuovo giorno, sessioni precedenti rimosse");
+            println!("CACHE EVICT | new day, removed previous entries");
         }
     }
 
