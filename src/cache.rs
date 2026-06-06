@@ -20,18 +20,13 @@ impl RetroVisCache {
     pub fn get_or_calculate_context<F>(
         &self, 
         asset: &str, 
-        session_id: &str, 
         timestamp: u32, 
         calc_fn: F
     ) -> CachedResult 
     where 
         F: FnOnce() -> CachedResult 
     {
-        let key = ContextCacheKey {
-            asset: asset.to_string(),
-            session_id: session_id.to_string(),
-            timestamp,
-        };
+        let key = ContextCacheKey::new(asset, timestamp);
 
         self.context_results.entry(key)
             .or_insert_with(calc_fn)
@@ -41,15 +36,10 @@ impl RetroVisCache {
     pub fn get_context(
         &self, 
         asset: &str, 
-        session_id: &str, 
         timestamp: u32
     ) -> Option<CachedResult> { 
         self.evict_if_new_day();
-        let key = ContextCacheKey {
-            asset: asset.to_string(),
-            session_id: session_id.to_string(),
-            timestamp,
-        };
+        let key = ContextCacheKey::new(asset, timestamp);
 
         // Usiamo .get() per una lettura concorrente condivisa
         self.context_results
@@ -59,8 +49,8 @@ impl RetroVisCache {
 
     pub fn get_or_calculate_candle<F>(
         &self,
-        asset: String,
-        timeframe: String,
+        asset: &str,
+        timeframe: &str,
         timestamp: u32,
         calc_fn: F,
     ) -> CachedResult
@@ -68,11 +58,7 @@ impl RetroVisCache {
         F: FnOnce() -> CachedResult,
     {
         self.evict_if_new_day();
-        let key = CandleCacheKey {
-            asset,
-            timeframe,
-            timestamp,
-        };
+        let key = CandleCacheKey::new(&asset, &timeframe, timestamp);
 
         self.candle_results.entry(key)
             .or_insert_with(calc_fn)
@@ -92,11 +78,7 @@ impl RetroVisCache {
 
         for i in 0..limit {
             let target_ts = current_ts as i64 - (i as i64 * step);
-            let key = CandleCacheKey {
-                asset: asset.to_string(),
-                timeframe: tf.to_string(),
-                timestamp: target_ts as u32,
-            };
+            let key = CandleCacheKey::new(asset, tf, target_ts as u32);
 
             if let Some(res) = self.candle_results.get(&key) {
                 history.push(res.clone());
@@ -141,6 +123,7 @@ impl RetroVisCache {
         match tf {
             "M1" => 60,
             "M5" => 300,
+            "M10" => 600,
             "M15" => 900,
             "M30" => 1800,
             "H1" => 3600,

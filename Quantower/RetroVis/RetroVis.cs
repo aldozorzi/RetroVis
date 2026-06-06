@@ -36,11 +36,18 @@ public class RetroVis : Indicator
     [InputParameter("Enable AI Analysis",4)]
     public bool EnableAiAnalysis { get; set; } = false;
 
+    [InputParameter("Draw Session Levels", 5)]
+    public bool DrawSessionLevels { get; set; } = true;
+
+    [InputParameter("Draw Next Candle Levels", 5)]
+    public bool DrawNextCandleLevels { get; set; } = true;
+
     #endregion
 
     #region Internal Fields
     private readonly HttpClient httpClient = new HttpClient();
     private AggregateData candlesSummary = new AggregateData();
+    private NextCandleData nextCandle = new NextCandleData();
     private List<MatchResponse> candlesResults = new List<MatchResponse>();
     private bool isPanelVisible = true;
     private Rectangle toggleRect = new Rectangle(5, 80, 120, 25);
@@ -185,7 +192,7 @@ public class RetroVis : Indicator
         try
         {
             var lastCandle = candles[candles.Count - 1];
-            long finalTimestamp = lastCandle.Timestamp;
+            uint finalTimestamp = (uint)lastCandle.Timestamp;
             var request = new QueryRequest
             {
                 Symbol = ticker,
@@ -211,6 +218,7 @@ public class RetroVis : Indicator
                 // Log("Success");
                 candlesResults = fullData.Matches;
                 candlesSummary = fullData.Summary;
+                nextCandle = fullData.NextCandle;
                 _ =FetchAiAnalysis(candles);
             }
         }
@@ -223,7 +231,7 @@ public class RetroVis : Indicator
         try
         {
             var lastCandle = candles[candles.Count - 1];
-            long finalTimestamp = lastCandle.Timestamp;
+            uint finalTimestamp = (uint)lastCandle.Timestamp;
             ContextQueryRequest contextData = BuildContextQueryRequest();
             var request = new AiAnalysisRequest
             {
@@ -322,7 +330,7 @@ public class RetroVis : Indicator
             if ((float)Low(i) < prevLow) prevLow = (float)Low(i);
         }
 
-        long openTimestamp = new DateTimeOffset(Time(openBarIndex)).ToUnixTimeSeconds();
+        uint openTimestamp = (uint)new DateTimeOffset(Time(openBarIndex)).ToUnixTimeSeconds();
 
         var request = new ContextQueryRequest
         {
@@ -391,18 +399,44 @@ public class RetroVis : Indicator
 
     private void DrawLevels(Graphics gr)
     {
-        if(this.currentCandleCount < this.MinCandles) return;
-        var mainWindow = this.CurrentChart.MainWindow;
-        double up = currentPriceBase + candlesSummary.AvgUp;
-        double down = currentPriceBase - candlesSummary.AvgDown;
-        int upYCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartY(up));
-        int downYCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartY(down));
-        int drawBarIndex = Math.Max(0, openBarIndex);
-        int startXCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartX(Time(drawBarIndex)));
-        int rightX = mainWindow.ClientRectangle.Right;
+        if(!DrawSessionLevels && !DrawNextCandleLevels) return;
 
-        gr.DrawLine(upPen, startXCoord, upYCoord, rightX, upYCoord);
-        gr.DrawLine(downPen, startXCoord, downYCoord, rightX, downYCoord);
+        if(this.currentCandleCount < this.MinCandles) return;
+        if (DrawSessionLevels)
+        {
+            var mainWindow = this.CurrentChart.MainWindow;
+            double up = currentPriceBase + candlesSummary.AvgUp;
+            double down = currentPriceBase - candlesSummary.AvgDown;
+            int upYCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartY(up));
+            int downYCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartY(down));
+            int drawBarIndex = Math.Max(0, openBarIndex);
+            int startXCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartX(Time(drawBarIndex)));
+            int rightX = mainWindow.ClientRectangle.Right;
+
+            gr.DrawLine(upPen, startXCoord, upYCoord, rightX, upYCoord);
+            gr.DrawLine(downPen, startXCoord, downYCoord, rightX, downYCoord);
+        }
+        if (DrawNextCandleLevels)
+        {
+            var mainWindow = this.CurrentChart.MainWindow;
+            double up = Close(1) + nextCandle.AvgUp;
+            double down = Close(1) - nextCandle.AvgDown;
+            int upYCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartY(up));
+            int downYCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartY(down));
+            int drawBarIndex = Math.Max(0, openBarIndex);
+            int startXCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartX(Time(drawBarIndex)));
+            int rightX = mainWindow.ClientRectangle.Right;
+            using (Pen dashedUpPen = new Pen(Color.Turquoise, 2f))
+            {
+                dashedUpPen.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash;
+                gr.DrawLine(dashedUpPen, startXCoord, upYCoord, rightX, upYCoord);
+            }
+            using (Pen dashedDownPen = new Pen(Color.LightGoldenrodYellow, 2f))
+            {
+                dashedDownPen.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash;
+                gr.DrawLine(dashedDownPen, startXCoord, downYCoord, rightX, downYCoord);
+            }
+        }
     }
 
     private void DrawResultsPanel(Graphics gr)
@@ -467,21 +501,39 @@ public class RetroVis : Indicator
         }
         else
         {
-            Rectangle candleSummaryRect = new Rectangle(tx, ty, panelRect.Width - 24, 45);
-            gr.DrawRectangle(Pens.DimGray, candleSummaryRect);
-            string summaryLine1 = $"UP: +{candlesSummary.AvgUp:F1} | DOWN: -{candlesSummary.AvgDown:F1}";
-        
+            // SESSION DATA
             Brush edgeBrush = Brushes.White;
             if (candlesSummary.EdgeRatio > 2.0)
                 edgeBrush = (candlesSummary.AvgUp > Math.Abs(candlesSummary.AvgDown)) ? Brushes.LimeGreen : Brushes.Red;
             else if (candlesSummary.EdgeRatio > 1.2)
                 edgeBrush = Brushes.Gold;
-            string summaryLine2 = $"EDGE: {(Math.Abs(candlesSummary.AvgDown) > candlesSummary.AvgUp ? "-" : "+")}{candlesSummary.EdgeRatio:F2} | EOS: {candlesSummary.AvgEos:+0.0;-0.0} | EOH:{candlesSummary.AvgEoh:+0.0;-0.0}";
+            Rectangle candleSummaryRect = new Rectangle(tx, ty, panelRect.Width - 24, 45);
+            gr.DrawRectangle(Pens.DimGray, candleSummaryRect);
 
-            gr.DrawString(summaryLine1, dataFont, Brushes.LightGray, tx + 5, ty + 5);
-            gr.DrawString(summaryLine2, dataFont, edgeBrush, tx + 5, ty + 22);
+            string summaryText = $"SESS UP:+{candlesSummary.AvgUp:F1} | DOWN:-{candlesSummary.AvgDown:F1} | ";
+            gr.DrawString(summaryText, dataFont, Brushes.White, tx + 5, ty + 5);
+            float summaryWidth = gr.MeasureString(summaryText, dataFont).Width;
+            string edgeText = $"EDGE:{(Math.Abs(candlesSummary.AvgDown) > candlesSummary.AvgUp ? "-" : "+")}{candlesSummary.EdgeRatio:F2}";
+            gr.DrawString(edgeText, dataFont, edgeBrush, tx + 5 + summaryWidth, ty + 5);
 
-            ty += 55;
+            ty += 24;
+
+            // NEXT CANDLE DATA
+
+
+            edgeBrush = Brushes.White;
+            if (nextCandle.EdgeRatio > 2.0)
+                edgeBrush = (nextCandle.AvgUp > Math.Abs(nextCandle.AvgDown)) ? Brushes.LimeGreen : Brushes.Red;
+            else if (nextCandle.EdgeRatio > 1.2)
+                edgeBrush = Brushes.Gold;
+
+            summaryText = $"NXT UP:+{nextCandle.AvgUp:F1} | DOWN:-{nextCandle.AvgDown:F1} | ";
+            gr.DrawString(summaryText, dataFont, Brushes.White, tx + 5, ty);
+            summaryWidth = gr.MeasureString(summaryText, dataFont).Width;
+            edgeText = $"EDGE:{(Math.Abs(nextCandle.AvgDown) > nextCandle.AvgUp ? "-" : "+")}{nextCandle.EdgeRatio:F2}";
+            gr.DrawString(edgeText, dataFont, edgeBrush, tx + 5 + summaryWidth, ty);
+
+            ty += 30;
 
             foreach (var m in candlesResults)
             {
@@ -495,10 +547,10 @@ public class RetroVis : Indicator
                 gr.DrawString($"{dateStr} (MATCH:{m.Similarity:F1}%)", dataFont, Brushes.Gray, tx, ty);
                 ty += 15;
 
-                string vals = $"UP: {m.UpPts:+0.0} | DOWN: {m.DownPts:0.0}";
+                string vals = $"SESS UP: {m.UpPts:+0.0} | DOWN: {m.DownPts:0.0}";
                 gr.DrawString(vals, dataFont, Brushes.White, tx + 10, ty);
                 ty += 15;
-                vals = $"EOS: {m.EosPts:+0.0;-0.0} | EOH: {m.EohPts:+0.0;-0.0}";
+                vals = $"NXT UP: {m.NextCandleUp:+0.0;-0.0} | DOWN: {m.NextCandleDown:+0.0;-0.0}";
                 gr.DrawString(vals, dataFont, Brushes.White, tx + 10, ty);
 
                 ty += 25;
@@ -518,18 +570,21 @@ public class RetroVis : Indicator
             else if (contextSummary.EdgeRatio > 1.2)
                 ctxEdgeBrush = Brushes.Gold;
 
-            Rectangle ctxSummaryRect = new Rectangle(tx, ty, panelRect.Width - 24, 45);
+            Rectangle ctxSummaryRect = new Rectangle(tx, ty, panelRect.Width - 24, 25);
             gr.DrawRectangle(Pens.DimGray, ctxSummaryRect);
 
-            gr.DrawString($"UP: +{contextSummary.AvgUp:F1} | DOWN: -{contextSummary.AvgDown:F1}", dataFont, Brushes.LightGray, tx + 5, ty + 5);
-            gr.DrawString($"EDGE: {(Math.Abs(contextSummary.AvgDown) > contextSummary.AvgUp ? "-" : "+")}{contextSummary.EdgeRatio:F2} | EOS: {contextSummary.AvgEos:+0.0;-0.0} | EOH: {contextSummary.AvgEoh:+0.0;-0.0}", dataFont, ctxEdgeBrush, tx + 5, ty + 22);
 
-            ty += 55;
+            string ctxSummaryText = $"SESS UP:+{contextSummary.AvgUp:F1} | DOWN:-{contextSummary.AvgDown:F1} | ";
+            gr.DrawString(ctxSummaryText, dataFont, Brushes.LightGray, tx + 5, ty + 5);
+            float ctxSummaryWidth = gr.MeasureString(ctxSummaryText, dataFont).Width;
+            gr.DrawString($"EDGE: {(Math.Abs(contextSummary.AvgDown) > contextSummary.AvgUp ? "-" : "+")}{contextSummary.EdgeRatio:F2}", dataFont, ctxEdgeBrush, tx + 5 + ctxSummaryWidth, ty + 5);
+
+            ty += 35;
 
             foreach (var m in contextResults)
             {
 
-                var ctxRect = new RectangleF(tx, ty, panelRect.Width - 24, 50);
+                var ctxRect = new RectangleF(tx, ty, panelRect.Width - 24, 32);
                 gr.FillRectangle(ctxBgBrush, ctxRect);
                 contextClickAreas.Add(ctxRect);
 
@@ -543,10 +598,6 @@ public class RetroVis : Indicator
 
                 string vals = $"UP: {m.UpPts:+0.0}  DOWN: {m.DownPts:0.0}";
                 gr.DrawString(vals, dataFont, Brushes.White, tx + 10, ty);
-                ty += 15;
-                vals = $"EOS: {m.EosPts:+0.0;-0.0} | EOH: {m.EohPts:+0.0;-0.0}";
-                gr.DrawString(vals, dataFont, Brushes.White, tx + 10, ty);
-
                 ty += 25;
             }
             lastPanelHeight = ty - panelRect.Y + 10;
@@ -771,7 +822,7 @@ public class RetroVis : Indicator
             DateTime bTime = TimeZoneInfo.ConvertTimeFromUtc(Time(i).ToUniversalTime(), NyTz);
             candlesToInquire.Add(new RawCandle
             {
-                Timestamp = ((DateTimeOffset)bTime).ToUnixTimeSeconds(),
+                Timestamp = (uint)((DateTimeOffset)bTime).ToUnixTimeSeconds(),
                 Open = (float)Open(i),
                 High = (float)High(i),
                 Low = (float)Low(i),
@@ -863,7 +914,7 @@ public class RetroVis : Indicator
 
     public class RawCandle
     {
-        [JsonPropertyName("timestamp")] public long Timestamp { get; set; }
+        [JsonPropertyName("timestamp")] public uint Timestamp { get; set; }
         [JsonPropertyName("open")] public float Open { get; set; }
         [JsonPropertyName("high")] public float High { get; set; }
         [JsonPropertyName("low")] public float Low { get; set; }
@@ -875,6 +926,7 @@ public class RetroVis : Indicator
     {
         [JsonPropertyName("summary")] public AggregateData Summary { get; set; }
         [JsonPropertyName("matches")] public List<MatchResponse> Matches { get; set; }
+        [JsonPropertyName("next_candle")] public NextCandleData NextCandle { get; set; }
     }
 
     public class AggregateData
@@ -888,15 +940,24 @@ public class RetroVis : Indicator
         [JsonPropertyName("edge_ratio")] public float EdgeRatio { get; set; }
     }
 
+    public class NextCandleData
+    {
+        [JsonPropertyName("avg_up")] public float AvgUp { get; set; }
+        [JsonPropertyName("avg_down")] public float AvgDown { get; set; }
+        [JsonPropertyName("edge_ratio")] public float EdgeRatio { get; set; }
+    }
     public class MatchResponse
     {
-        [JsonPropertyName("timestamp")] public long Timestamp { get; set; }
+        [JsonPropertyName("timestamp")] public uint Timestamp { get; set; }
         [JsonPropertyName("similarity")] public float Similarity { get; set; } 
         [JsonPropertyName("up_pts")] public float UpPts { get; set; }           
         [JsonPropertyName("down_pts")] public float DownPts { get; set; }      
         [JsonPropertyName("eos_pts")] public float EosPts { get; set; }
 
         [JsonPropertyName("eoh_pts")] public float EohPts { get; set; }
+        [JsonPropertyName("next_candle_up")] public float NextCandleUp { get; set; }
+
+        [JsonPropertyName("next_candle_down")] public float NextCandleDown { get; set; }
     }
     public class QueryRequest
     {
@@ -904,7 +965,7 @@ public class RetroVis : Indicator
         [JsonPropertyName("session_id")] public string SessionId { get; set; }
         [JsonPropertyName("candles")] public List<RawCandle> Candles { get; set; }
         [JsonPropertyName("top_k")] public int TopK { get; set; }
-        [JsonPropertyName("timestamp")] public long Timestamp { get; set; }
+        [JsonPropertyName("timestamp")] public uint Timestamp { get; set; }
         [JsonPropertyName("timeframe")] public string Timeframe { get; set; }
         [JsonPropertyName("session_open")] public float SessionOpen { get; set; }
     }
@@ -919,7 +980,7 @@ public class RetroVis : Indicator
         [JsonPropertyName("intraday_high")] public float IntradayHigh { get; set; }
         [JsonPropertyName("intraday_low")] public float IntradayLow { get; set; }
         [JsonPropertyName("top_k")] public int TopK { get; set; }
-        [JsonPropertyName("timestamp")] public long Timestamp { get; set; }
+        [JsonPropertyName("timestamp")] public uint Timestamp { get; set; }
     }
 
     public class AiAnalysisRequest
@@ -928,7 +989,7 @@ public class RetroVis : Indicator
         [JsonPropertyName("symbol")] public string Symbol { get; set; }
         [JsonPropertyName("session_id")] public string SessionId { get; set; }
         [JsonPropertyName("candles")] public List<RawCandle> Candles { get; set; }
-        [JsonPropertyName("timestamp")] public long Timestamp { get; set; }
+        [JsonPropertyName("timestamp")] public uint Timestamp { get; set; }
         [JsonPropertyName("timeframe")] public string Timeframe { get; set; }
         [JsonPropertyName("current_price_action")] public float CurrentPriceAction { get; set; }
         [JsonPropertyName("session_open")] public float SessionOpen { get; set; }

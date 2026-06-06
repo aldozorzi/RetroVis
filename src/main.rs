@@ -49,19 +49,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ym = thread::spawn(|| parser::load_and_process("data/ym-M5.csv", "YM").map_err(|e| e.to_string()));
     
     let nq_5m = nq.join().unwrap()?;
-    //let nq_15m = parser::resample(&nq_5m, 15);
     engines.insert("NQ".to_string(), SearchEngine::new(nq_5m));
-    //engines.insert("NQ:M15".to_string(), SearchEngine::new(nq_15m));
 
     let gc_5m = gc.join().unwrap()?;
-    //let gc_15m = parser::resample(&gc_5m, 15);
     engines.insert("GC".to_string(), SearchEngine::new(gc_5m));  
-    //engines.insert("GC:M15".to_string(), SearchEngine::new(gc_15m));
 
     let ym_5m = ym.join().unwrap()?;
-    //let ym_15m = parser::resample(&ym_5m, 15);
     engines.insert("YM".to_string(), SearchEngine::new(ym_5m));
-    //engines.insert("YM:M15".to_string(), SearchEngine::new(ym_15m));
 
     let mut sessions = HashMap::new();
     sessions.insert("LONDON_OPEN".to_string(), models::SessionConfig {
@@ -148,11 +142,7 @@ pub async fn ai_analysis_handler(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AiAnalysisRequest>,
 ) -> impl IntoResponse {
-    let key = CandleCacheKey {
-        asset: req.symbol.clone(),
-        timeframe: req.timeframe.clone(),
-        timestamp: req.timestamp,
-    };
+    let key = CandleCacheKey::new(&req.symbol, &req.timeframe, req.timestamp);
 
     // Cache-aside: usa la cache se disponibile, altrimenti calcola autonomamente
     let full_history = {
@@ -166,7 +156,7 @@ pub async fn ai_analysis_handler(
             )
         } else { h }
     };
-    let context_res = match state.cache.get_context(&req.symbol, &req.session_id, req.timestamp) {
+    let context_res = match state.cache.get_context(&req.symbol, req.timestamp) {
         Some(c) => c,
         None => compute_context(
             &state, &req.symbol, &req.session_id, req.timestamp,
@@ -212,7 +202,7 @@ fn compute_candle_history(
         let current_ts = timestamp as i64 - ((candles.len() - i) as i64 * timeframe_seconds);
 
         state.cache.get_or_calculate_candle(
-            symbol.to_string(), timeframe.to_string(),
+            symbol, timeframe,
             current_ts as u32,
             || {
                 let normalized: Vec<NormalizedCandle<f32>> = slice.iter()
@@ -244,7 +234,7 @@ fn compute_context(
     let engine  = state.engines.get(symbol).expect("Ticker not found");
     let session = state.sessions.get(session_id).expect("Session not found");
 
-    state.cache.get_or_calculate_context(symbol, session_id, timestamp, || {
+    state.cache.get_or_calculate_context(symbol, timestamp, || {
         let ctx = Context::new(
             session_open, prev_close, prev_high, prev_low, intraday_high, intraday_low,
         );
@@ -271,18 +261,24 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
         let eos = (m.eod_ret_pct / 100.0) * current_price;
         let eoh_pts = (m.eoh_pct / 100.0) * current_price;
         
+        // Calcolo dei punti reali proiettati sull'apertura odierna
+        let next_up_pts = (m.next_candle_up_pct.unwrap_or(0.0) / 100.0) * current_price;
+        let next_down_pts = (m.next_candle_down_pct.unwrap_or(0.0) / 100.0) * current_price;
+        
         sum_mfe += up.abs();
         sum_mae += down.abs();
         sum_eos += eos;
         sum_eoh += eoh_pts;
 
         response_matches.push(MatchResponse {
-            timestamp: m.timestamp, // Assegnazione diretta i64 senza cloni
+            timestamp: m.timestamp,
             similarity: 1.0 / (1.0 + m.distance) * 100.0,
             up_pts: up,
             down_pts: down,
             eos_pts: eos,
             eoh_pts,
+            next_candle_up: next_up_pts,   // Ora sono punti reali
+            next_candle_down: next_down_pts, // Ora sono punti reali
         });
     }
 
@@ -305,6 +301,7 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
             avg_eos,
             avg_eoh,
             edge_ratio: long_edge.max(short_edge),
+
         },
         matches
     )

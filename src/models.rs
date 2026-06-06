@@ -94,12 +94,15 @@ pub struct MatchOutcome {
     pub mfe_pct: f32,
     pub mae_pct: f32,
     pub eoh_pct: f32,
+    pub next_candle_up_pct: Option<f32>,
+    pub next_candle_down_pct: Option<f32>,
 }
 
 #[derive(Debug, serde::Serialize)]
 pub struct MatchesResponse {
     pub summary: AggregateData,
     pub matches: Vec<MatchResponse>,
+    pub next_candle: NextCandleData,
 }
 impl From<CachedResult> for MatchesResponse {
     fn from(cached: CachedResult) -> Self {
@@ -112,6 +115,11 @@ impl From<CachedResult> for MatchesResponse {
                 avg_eoh: cached.avg_eoh as f32,
             },
             matches: cached.matches.iter().cloned().map(MatchResponse::from).collect(),
+            next_candle: NextCandleData {
+                avg_up: cached.avg_next_up,
+                avg_down: cached.avg_next_down,
+                edge_ratio: cached.next_edge_ratio,
+            },
         }
     }
 }
@@ -125,6 +133,8 @@ pub struct MatchResponse {
     pub up_pts: f32,
     pub down_pts: f32,
     pub eoh_pts: f32,
+    pub next_candle_up: f32,  
+    pub next_candle_down: f32,
 }
 
 impl From<HistoricalMatch> for MatchResponse {
@@ -136,6 +146,8 @@ impl From<HistoricalMatch> for MatchResponse {
             down_pts: m.down as f32,
             eos_pts: m.eos as f32,
             eoh_pts: m.eoh as f32,
+            next_candle_up: m.next_candle_up_pct,
+            next_candle_down: m.next_candle_down_pct,
         }
     }
 }
@@ -147,6 +159,13 @@ pub struct AggregateData {
     pub avg_eos: f32,
     pub edge_ratio: f32,
     pub avg_eoh: f32,
+}
+
+#[derive(Debug, serde::Serialize, Clone, Copy, serde::Deserialize)]
+pub struct NextCandleData {
+    pub avg_up: f32,
+    pub avg_down: f32,
+    pub edge_ratio: f32,
 }
 
 pub struct AppState {
@@ -221,65 +240,112 @@ pub struct ContextQueryRequest {
 
 #[derive(Hash, PartialEq, Eq, Clone)]
 pub struct CandleCacheKey {
-    pub asset: String,
-    pub timeframe: String,
+    pub asset: [u8; 8],
+    pub timeframe: [u8; 4],
     pub timestamp: u32, 
+}
+impl CandleCacheKey {
+    pub fn new(asset_str: &str, timeframe_str: &str, timestamp: u32) -> Self {
+        let mut asset = [0u8; 8];
+        let src_a = asset_str.as_bytes();
+        let amt_a = src_a.len().min(8);
+        asset[..amt_a].copy_from_slice(&src_a[..amt_a]);
+
+        let mut timeframe = [0u8; 4];
+        let src_t = timeframe_str.as_bytes();
+        let amt_t = src_t.len().min(4);
+        timeframe[..amt_t].copy_from_slice(&src_t[..amt_t]);
+
+        Self { asset, timeframe, timestamp }
+    }
 }
 
 #[derive(Hash, PartialEq, Eq, Clone)]
 pub struct ContextCacheKey {
-    pub asset: String,
-    pub session_id: String, 
+    pub asset: [u8; 8],
     pub timestamp: u32,       
+}
+impl ContextCacheKey {
+    pub fn new(asset_str: &str, timestamp: u32) -> Self {
+        let mut asset = [0u8; 8];
+        let src = asset_str.as_bytes();
+        let amt = src.len().min(8);
+        asset[..amt].copy_from_slice(&src[..amt]);
+
+        Self { asset, timestamp }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct HistoricalMatch {
     pub timestamp: u32,      
-    pub match_score: f64,  
-    pub up: f64,           
-    pub down: f64,        
-    pub eos: f64,        
-    pub eoh: f64,        
+    pub match_score: f32,  
+    pub up: f32,           
+    pub down: f32,        
+    pub eos: f32,        
+    pub eoh: f32, 
+    pub next_candle_up_pct: f32,
+    pub next_candle_down_pct: f32,      
 }
 
 impl From<MatchResponse> for HistoricalMatch {
     fn from(m: MatchResponse) -> Self {
         Self {
             timestamp: m.timestamp as u32,
-            match_score: m.similarity as f64,
-            up: m.up_pts as f64,
-            down: m.down_pts as f64,
-            eos: m.eos_pts as f64,
-            eoh: m.eoh_pts as f64,
+            match_score: m.similarity,
+            up: m.up_pts,
+            down: m.down_pts,
+            eos: m.eos_pts,
+            eoh: m.eoh_pts,
+            next_candle_up_pct: m.next_candle_up,
+            next_candle_down_pct: m.next_candle_down,
         }
     }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CachedResult {
-    pub edge_ratio: f64,
-    pub avg_eos: f64,
-    pub avg_up: f64,
-    pub avg_down: f64,
+    pub edge_ratio: f32,
+    pub avg_eos: f32,
+    pub avg_up: f32,
+    pub avg_down: f32,
     pub matches: Arc<Vec<HistoricalMatch>>,
     pub ai_analysis: Option<Arc<String>>,
-    pub avg_eoh: f64,
+    pub avg_eoh: f32,
+    pub avg_next_up: f32, 
+    pub avg_next_down: f32,
+    pub next_edge_ratio: f32,
 }
 
 impl CachedResult {
     pub fn from_aggregates(summary: AggregateData, matches: Vec<MatchResponse>) -> Self {
+        // Calcola la media corretta per la candela successiva basandosi sui singoli match passati
+        let count = matches.len() as f32;
+        let (avg_next_up, avg_next_down) = if count > 0.0 {
+            let sum_up: f32 = matches.iter().map(|m| m.next_candle_up).sum();
+            let sum_down: f32 = matches.iter().map(|m| m.next_candle_down).sum();
+            (sum_up / count, sum_down / count)
+        } else {
+            (0.0, 0.0)
+        };
+
+        let long_edge = avg_next_up / (if avg_next_down == 0.0 { 1.0 } else { avg_next_down });
+        let short_edge = avg_next_down / (if avg_next_up == 0.0 { 1.0 } else { avg_next_up });
+        let next_edge_ratio = long_edge.max(short_edge);
 
         let historical_matches: Vec<HistoricalMatch> = matches.into_iter().map(HistoricalMatch::from).collect();
 
         Self {
-            edge_ratio: summary.edge_ratio as f64,
-            avg_eos: summary.avg_eos as f64,
-            avg_up: summary.avg_up as f64,
-            avg_down: summary.avg_down as f64,
-            avg_eoh: summary.avg_eoh as f64,
+            edge_ratio: summary.edge_ratio,
+            avg_eos: summary.avg_eos,
+            avg_up: summary.avg_up,
+            avg_down: summary.avg_down,
+            avg_eoh: summary.avg_eoh,
             matches: Arc::new(historical_matches),
             ai_analysis: None,
+            avg_next_up,
+            avg_next_down,
+            next_edge_ratio,
         }
     }
 }
@@ -291,8 +357,8 @@ pub struct AiAnalysisRequest {
     pub candles: Vec<RawCandle<f32>>,
     pub timestamp: u32,
     pub timeframe: String,
-    pub current_price_action: f64,
-    pub session_open: f64,
+    pub current_price_action: f32,
+    pub session_open: f32,
     pub prev_close: f32,
     pub prev_high: f32,
     pub prev_low: f32,

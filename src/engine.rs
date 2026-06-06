@@ -120,6 +120,24 @@ impl SearchEngine {
                 if c.low  < min_low  { min_low  = c.low;  }
             }
 
+            // --- Calcolo movimento candela successiva (Punto X + 1) ---
+            let next_idx = start_idx + len;
+            let (next_up_pct, next_down_pct) = if next_idx < candles.len() {
+                let next_c = &candles[next_idx];
+                
+                if baseline > 0.0 {
+                    (
+                        ((next_c.high - next_c.open) / baseline) * 100.0,
+                        ((next_c.open - next_c.low) / baseline) * 100.0,
+                    )
+                } else {
+                    (0.0, 0.0)
+                }
+            } else {
+                (0.0, 0.0)
+            };
+            // -----------------------------------------------------------------------
+
             outcomes.push(crate::models::MatchOutcome {
                 timestamp:   candles[start_idx].timestamp,
                 distance:    dist,
@@ -127,6 +145,8 @@ impl SearchEngine {
                 mfe_pct:     ((max_high   - baseline) / baseline) * 100.0,
                 mae_pct:     ((min_low    - baseline) / baseline) * 100.0,
                 eoh_pct:     eoh_pct.unwrap_or(0.0),
+                next_candle_up_pct: Some(next_up_pct),
+                next_candle_down_pct: Some(next_down_pct),
             });
         }
 
@@ -261,6 +281,8 @@ impl SearchEngine {
             mfe_pct:     ((max_high   - baseline) / baseline) * 100.0,
             mae_pct:     ((min_low    - baseline) / baseline) * 100.0,
             eoh_pct:     eoh_pct.unwrap_or(0.0),
+            next_candle_up_pct: None, // Non calcolato in questo contesto
+            next_candle_down_pct: None, // Non calcolato in questo contesto
         });
     }
 
