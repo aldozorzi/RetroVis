@@ -254,7 +254,7 @@ public class RetroVis : Indicator
             };
             //Log("CurrentPriceAction: " + request.CurrentPriceAction);
             string json = JsonSerializer.Serialize(request);
-            Log("AI json:" + json);
+            //Log("AI json:" + json);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
             var response = await httpClient.PostAsync($"{ServerUrl.TrimEnd('/')}/get-ai-analysis", content);
             if (response.IsSuccessStatusCode)
@@ -420,7 +420,7 @@ public class RetroVis : Indicator
         }
         if (DrawNextCandleLevels)
         {
-            Log("Clicked Candle Index: " + (analysisIndex +1)+ " - Time:" + Time(analysisIndex+1) +"Close: " + Close(analysisIndex+1));
+            //Log("Clicked Candle Index: " + (analysisIndex +1)+ " - Time:" + Time(analysisIndex+1) +"Close: " + Close(analysisIndex+1));
             var mainWindow = this.CurrentChart.MainWindow;
             double up = Close(analysisIndex+1) + nextCandle.AvgUp;
             double down = Close(analysisIndex+1) - nextCandle.AvgDown;
@@ -664,7 +664,7 @@ public class RetroVis : Indicator
     private void OnChartMouseDown(object sender, ChartMouseNativeEventArgs e)
     {
         chartMouseDownReceived = true;
-        Log("OnChartMouseDown - setting chartMouseDownReceived: " + chartMouseDownReceived);
+        //Log("OnChartMouseDown - setting chartMouseDownReceived: " + chartMouseDownReceived);
     }
     private void OnChartMouseUp(object sender, ChartMouseNativeEventArgs e)
     {
