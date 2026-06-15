@@ -49,7 +49,7 @@ public class RetroVis : Indicator
     private AggregateData candlesSummary = new AggregateData();
     private NextCandleData nextCandle = new NextCandleData();
     private List<MatchResponse> candlesResults = new List<MatchResponse>();
-    private bool isPanelVisible = true;
+    private bool isPanelVisible = false;
     private Rectangle toggleRect = new Rectangle(5, 80, 120, 25);
     private int openBarIndex = -1;
     private double currentPriceBase = 0;
@@ -96,6 +96,8 @@ public class RetroVis : Indicator
     private float aiBoxHeight = 100f;
 
     private bool chartMouseDownReceived = false;
+
+    private int analysisIndex;
     #endregion
 
     public RetroVis() : base()
@@ -163,7 +165,7 @@ public class RetroVis : Indicator
 
     protected override void OnUpdate(UpdateArgs args)
     {
-        if (isBacktestMode) return;
+        if (isBacktestMode || !isPanelVisible) return;
         currentDelta = Close(0) - currentPriceBase;
 
         DateTime currentBarTime = Time();
@@ -418,9 +420,10 @@ public class RetroVis : Indicator
         }
         if (DrawNextCandleLevels)
         {
+            Log("Clicked Candle Index: " + (analysisIndex +1)+ " - Time:" + Time(analysisIndex+1) +"Close: " + Close(analysisIndex+1));
             var mainWindow = this.CurrentChart.MainWindow;
-            double up = Close(1) + nextCandle.AvgUp;
-            double down = Close(1) - nextCandle.AvgDown;
+            double up = Close(analysisIndex+1) + nextCandle.AvgUp;
+            double down = Close(analysisIndex+1) - nextCandle.AvgDown;
             int upYCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartY(up));
             int downYCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartY(down));
             int drawBarIndex = Math.Max(0, openBarIndex);
@@ -600,9 +603,9 @@ public class RetroVis : Indicator
                 gr.DrawString(vals, dataFont, Brushes.White, tx + 10, ty);
                 ty += 25;
             }
-            lastPanelHeight = ty - panelRect.Y + 10;
+            
         }
-        
+        lastPanelHeight = ty - panelRect.Y + 10;
     }
 
     private void DrawAiPanel(Graphics gr)
@@ -665,16 +668,16 @@ public class RetroVis : Indicator
     }
     private void OnChartMouseUp(object sender, ChartMouseNativeEventArgs e)
     {
-        Log("OnChartMouseUp - reading chartMouseDownReceived: " + chartMouseDownReceived);
-        Log("OnChartMouseUp - checking chartMouseDownReceived: ");
+        //Log("OnChartMouseUp - reading chartMouseDownReceived: " + chartMouseDownReceived);
+        //Log("OnChartMouseUp - checking chartMouseDownReceived: ");
         if (!chartMouseDownReceived) return;  // click orfano, ignoralo
-        Log("OnChartMouseUp - checking checked ");
+        //Log("OnChartMouseUp - checking checked ");
         chartMouseDownReceived = false;
 
         if (toggleRect.Contains(e.Location))
         {
             isPanelVisible = !isPanelVisible;
-            Log("OnChartMouseUp - Target: toggleRect");
+            //Log("OnChartMouseUp - Target: toggleRect");
             return;
         }
 
@@ -682,7 +685,7 @@ public class RetroVis : Indicator
         {
             isBacktestMode = !isBacktestMode;
             if (!isBacktestMode) lastProcessedBarTime = default; // Reset per tornare in real-time
-            Log("OnChartMouseUp - Target: backtestBtnRect");
+            //Log("OnChartMouseUp - Target: backtestBtnRect");
             return;
         }
 
@@ -702,7 +705,7 @@ public class RetroVis : Indicator
                             FileName = url,
                             UseShellExecute = true
                         });
-                        Log("OnChartMouseUp - Target: Candle match");
+                        //Log("OnChartMouseUp - Target: Candle match");
                         return;
                     }
                     catch (Exception ex)
@@ -721,7 +724,7 @@ public class RetroVis : Indicator
                     string url = $"http://127.0.0.1:9999/visualize?symbol={ticker}&date={date}";
                     try { 
                         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = url, UseShellExecute = true });
-                        Log("OnChartMouseUp - Target: Context match");
+                        //Log("OnChartMouseUp - Target: Context match");
                         return; 
                     }
                     catch (Exception ex) { Log("Errore apertura browser: " + ex.Message); }
@@ -733,7 +736,7 @@ public class RetroVis : Indicator
 
         if (isBacktestMode)
         {
-            Log("OnChartMouseUp - Target: Backtest");
+            //Log("OnChartMouseUp - Target: Backtest");
             DateTime clickTime = e.Window.CoordinatesConverter.GetTime(e.X);
             int candleIndex = GetIndexByTime(clickTime);
             RunManualAnalysis(candleIndex);
@@ -750,6 +753,7 @@ public class RetroVis : Indicator
 
     private void ProcessAnalysis(int refIndex)
     {
+        analysisIndex = refIndex;
         //Log("ProcessAnalysis called with refIndex: " + refIndex);
         DateTime referenceTimeUtc = Time(refIndex).ToUniversalTime();
 
