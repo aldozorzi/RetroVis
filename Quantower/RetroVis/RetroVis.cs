@@ -49,7 +49,7 @@ public class RetroVis : Indicator
     private AggregateData candlesSummary = new AggregateData();
     private NextCandleData nextCandle = new NextCandleData();
     private List<MatchResponse> candlesResults = new List<MatchResponse>();
-    private bool isPanelVisible = false;
+    private bool isPanelVisible = true;
     private Rectangle toggleRect = new Rectangle(5, 80, 120, 25);
     private int openBarIndex = -1;
     private double currentPriceBase = 0;
@@ -215,11 +215,14 @@ public class RetroVis : Indicator
             if (response.IsSuccessStatusCode)
             {
                 string resJson = await response.Content.ReadAsStringAsync();
+                Log("resJson: " + resJson);
                 var fullData = JsonSerializer.Deserialize<MatchesResponse>(resJson);
+                
                 if (fullData == null) return;
                 // Log("Success");
                 candlesResults = fullData.Matches;
                 candlesSummary = fullData.Summary;
+                
                 nextCandle = fullData.NextCandle;
                 _ =FetchAiAnalysis(candles);
             }
@@ -364,7 +367,7 @@ public class RetroVis : Indicator
             if (response.IsSuccessStatusCode)
             {
                 string resJson = await response.Content.ReadAsStringAsync();
-
+                Log("Context resJson: " + resJson);
                 var fullData = JsonSerializer.Deserialize<MatchesResponse>(resJson);
                 if (fullData == null) return;
                 contextResults = fullData.Matches;
@@ -513,10 +516,10 @@ public class RetroVis : Indicator
             Rectangle candleSummaryRect = new Rectangle(tx, ty, panelRect.Width - 24, 45);
             gr.DrawRectangle(Pens.DimGray, candleSummaryRect);
 
-            string summaryText = $"SESS UP:+{candlesSummary.AvgUp:F1} | DOWN:-{candlesSummary.AvgDown:F1} | ";
+            string summaryText = $"SESS U:+{candlesSummary.AvgUp:F1} | D:-{candlesSummary.AvgDown:F1} | ";
             gr.DrawString(summaryText, dataFont, Brushes.White, tx + 5, ty + 5);
             float summaryWidth = gr.MeasureString(summaryText, dataFont).Width;
-            string edgeText = $"EDGE:{(Math.Abs(candlesSummary.AvgDown) > candlesSummary.AvgUp ? "-" : "+")}{candlesSummary.EdgeRatio:F2}";
+            string edgeText = $"E:{(Math.Abs(candlesSummary.AvgDown) > candlesSummary.AvgUp ? "-" : "+")}{candlesSummary.EdgeRatio:F2} ({candlesSummary.BiasPct:F1}%)";
             gr.DrawString(edgeText, dataFont, edgeBrush, tx + 5 + summaryWidth, ty + 5);
 
             ty += 24;
@@ -530,10 +533,10 @@ public class RetroVis : Indicator
             else if (nextCandle.EdgeRatio > 1.2)
                 edgeBrush = Brushes.Gold;
 
-            summaryText = $"NXT UP:+{nextCandle.AvgUp:F1} | DOWN:-{nextCandle.AvgDown:F1} | ";
+            summaryText = $"NXT U:+{nextCandle.AvgUp:F1} | D:-{nextCandle.AvgDown:F1} | ";
             gr.DrawString(summaryText, dataFont, Brushes.White, tx + 5, ty);
             summaryWidth = gr.MeasureString(summaryText, dataFont).Width;
-            edgeText = $"EDGE:{(Math.Abs(nextCandle.AvgDown) > nextCandle.AvgUp ? "-" : "+")}{nextCandle.EdgeRatio:F2}";
+            edgeText = $"E:{(Math.Abs(nextCandle.AvgDown) > nextCandle.AvgUp ? "-" : "+")}{nextCandle.EdgeRatio:F2} ({nextCandle.BiasPct:F1}%)";
             gr.DrawString(edgeText, dataFont, edgeBrush, tx + 5 + summaryWidth, ty);
 
             ty += 30;
@@ -553,7 +556,7 @@ public class RetroVis : Indicator
                 string vals = $"SESS UP: {m.UpPts:+0.0} | DOWN: {m.DownPts:0.0}";
                 gr.DrawString(vals, dataFont, Brushes.White, tx + 10, ty);
                 ty += 15;
-                vals = $"NXT UP: {m.NextCandleUp:+0.0;-0.0} | DOWN: {m.NextCandleDown:+0.0;-0.0}";
+                vals = $"NXT U:+{m.NextCandleUp:0.0} | D:-{m.NextCandleDown:0.0}";
                 gr.DrawString(vals, dataFont, Brushes.White, tx + 10, ty);
 
                 ty += 25;
@@ -577,10 +580,10 @@ public class RetroVis : Indicator
             gr.DrawRectangle(Pens.DimGray, ctxSummaryRect);
 
 
-            string ctxSummaryText = $"SESS UP:+{contextSummary.AvgUp:F1} | DOWN:-{contextSummary.AvgDown:F1} | ";
+            string ctxSummaryText = $"SESS U:+{contextSummary.AvgUp:F1} | D:-{contextSummary.AvgDown:F1} | ";
             gr.DrawString(ctxSummaryText, dataFont, Brushes.LightGray, tx + 5, ty + 5);
             float ctxSummaryWidth = gr.MeasureString(ctxSummaryText, dataFont).Width;
-            gr.DrawString($"EDGE: {(Math.Abs(contextSummary.AvgDown) > contextSummary.AvgUp ? "-" : "+")}{contextSummary.EdgeRatio:F2}", dataFont, ctxEdgeBrush, tx + 5 + ctxSummaryWidth, ty + 5);
+            gr.DrawString($"E: {(Math.Abs(contextSummary.AvgDown) > contextSummary.AvgUp ? "-" : "+")}{contextSummary.EdgeRatio:F2} ({contextSummary.BiasPct:F1}%)", dataFont, ctxEdgeBrush, tx + 5 + ctxSummaryWidth, ty + 5);
 
             ty += 35;
 
@@ -942,6 +945,8 @@ public class RetroVis : Indicator
         [JsonPropertyName("avg_eoh")] public float AvgEoh { get; set; }
 
         [JsonPropertyName("edge_ratio")] public float EdgeRatio { get; set; }
+
+        [JsonPropertyName("bias_pct")] public float BiasPct { get; set; }
     }
 
     public class NextCandleData
@@ -949,6 +954,7 @@ public class RetroVis : Indicator
         [JsonPropertyName("avg_up")] public float AvgUp { get; set; }
         [JsonPropertyName("avg_down")] public float AvgDown { get; set; }
         [JsonPropertyName("edge_ratio")] public float EdgeRatio { get; set; }
+        [JsonPropertyName("bias_pct")] public float BiasPct { get; set; }
     }
     public class MatchResponse
     {

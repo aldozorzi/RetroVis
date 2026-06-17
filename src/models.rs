@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use chrono::NaiveTime;
 use std::collections::HashMap;
 use crate::engine::SearchEngine;
@@ -61,14 +61,6 @@ impl CandleStore {
     }
 }
 
-/*
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HistoricalDay<T> {
-    pub date: u32,
-    pub candles: Vec<RawCandle<T>>, 
-}
-*/ 
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SessionConfig {
     pub id: String,
@@ -108,17 +100,19 @@ impl From<CachedResult> for MatchesResponse {
     fn from(cached: CachedResult) -> Self {
         Self {
             summary: AggregateData {
-                avg_up: cached.avg_up as f32,
-                avg_down: cached.avg_down as f32,
-                avg_eos: cached.avg_eos as f32,
-                edge_ratio: cached.edge_ratio as f32,
-                avg_eoh: cached.avg_eoh as f32,
+                avg_up: cached.avg_up,
+                avg_down: cached.avg_down,
+                avg_eos: cached.avg_eos,
+                edge_ratio: cached.edge_ratio,
+                avg_eoh: cached.avg_eoh,
+                bias_pct: cached.session_bias_pct,
             },
             matches: cached.matches.iter().cloned().map(MatchResponse::from).collect(),
             next_candle: NextCandleData {
                 avg_up: cached.avg_next_up,
                 avg_down: cached.avg_next_down,
                 edge_ratio: cached.next_edge_ratio,
+                bias_pct: cached.next_bias_pct
             },
         }
     }
@@ -159,6 +153,8 @@ pub struct AggregateData {
     pub avg_eos: f32,
     pub edge_ratio: f32,
     pub avg_eoh: f32,
+    #[serde(serialize_with = "serialize_f32_as_int")]
+    pub bias_pct: f32,
 }
 
 #[derive(Debug, serde::Serialize, Clone, Copy, serde::Deserialize)]
@@ -166,6 +162,8 @@ pub struct NextCandleData {
     pub avg_up: f32,
     pub avg_down: f32,
     pub edge_ratio: f32,
+    #[serde(serialize_with = "serialize_f32_as_int")]
+    pub bias_pct: f32,
 }
 
 pub struct AppState {
@@ -315,16 +313,18 @@ pub struct CachedResult {
     pub avg_next_up: f32, 
     pub avg_next_down: f32,
     pub next_edge_ratio: f32,
+    pub next_bias_pct: f32,
+    pub session_bias_pct: f32,
 }
 
 impl CachedResult {
     pub fn from_aggregates(summary: AggregateData, matches: Vec<MatchResponse>) -> Self {
-        // Calcola la media corretta per la candela successiva basandosi sui singoli match passati
-        let count = matches.len() as f32;
-        let (avg_next_up, avg_next_down) = if count > 0.0 {
-            let sum_up: f32 = matches.iter().map(|m| m.next_candle_up).sum();
-            let sum_down: f32 = matches.iter().map(|m| m.next_candle_down).sum();
-            (sum_up / count, sum_down / count)
+        let (avg_next_up, avg_next_down) = if !matches.is_empty() {
+            let mut ups: Vec<f32> = matches.iter().map(|m| m.next_candle_up).collect();
+            let mut downs: Vec<f32> = matches.iter().map(|m| m.next_candle_down).collect();
+            ups.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            downs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            (ups[ups.len() / 2], downs[downs.len() / 2])
         } else {
             (0.0, 0.0)
         };
@@ -332,6 +332,22 @@ impl CachedResult {
         let long_edge = avg_next_up / (if avg_next_down == 0.0 { 1.0 } else { avg_next_down });
         let short_edge = avg_next_down / (if avg_next_up == 0.0 { 1.0 } else { avg_next_up });
         let next_edge_ratio = long_edge.max(short_edge);
+
+        let mut next_bullish = 0usize;
+        let mut next_bearish = 0usize;
+        for m in matches.iter() {
+            if m.next_candle_up > m.next_candle_down { next_bullish += 1; }
+            else if m.next_candle_down > m.next_candle_up { next_bearish += 1; }
+        }
+
+        let next_total = (next_bullish + next_bearish) as f32;
+        let next_bias_pct = if next_total > 0.0 {
+            if next_bullish >= next_bearish {
+                next_bullish as f32 / next_total * 100.0
+            } else {
+                -(next_bearish as f32 / next_total * 100.0)
+            }
+        } else { 0.0 };
 
         let historical_matches: Vec<HistoricalMatch> = matches.into_iter().map(HistoricalMatch::from).collect();
 
@@ -346,6 +362,8 @@ impl CachedResult {
             avg_next_up,
             avg_next_down,
             next_edge_ratio,
+            next_bias_pct,
+            session_bias_pct: summary.bias_pct,
         }
     }
 }
@@ -374,4 +392,13 @@ pub struct AiAnalysisService {
     pub in_flight: DashMap<CandleCacheKey, broadcast::Sender<String>>,
     // Global cache manager reference for storing results after successful analysis
     pub cache: Arc<RetroVisCache>,
+}
+
+// Funzione helper che esegue il cast a intero durante la serializzazione
+fn serialize_f32_as_int<S>(value: &f32, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    // Usa .round() se vuoi arrotondare, oppure rimuovilo se vuoi solo troncare
+    serializer.serialize_i32(value.round() as i32)
 }

@@ -248,27 +248,29 @@ fn compute_context(
 }
 
 fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (AggregateData, Vec<MatchResponse>) {
-    let mut sum_mfe = 0.0;
-    let mut sum_mae = 0.0;
-    let mut sum_eos = 0.0;
-    let mut sum_eoh = 0.0f32;
-
+    let mut mfe_values: Vec<f32> = Vec::new();
+    let mut mae_values: Vec<f32> = Vec::new();
+    let mut eos_values: Vec<f32> = Vec::new();
+    let mut eoh_values: Vec<f32> = Vec::new();
     let mut response_matches = Vec::with_capacity(matches.len());
+    let mut sess_bullish = 0usize;
+    let mut sess_bearish = 0usize;
 
     for m in matches.iter() {
         let up = (m.mfe_pct / 100.0) * current_price;
         let down = (m.mae_pct / 100.0) * current_price;
         let eos = (m.eod_ret_pct / 100.0) * current_price;
         let eoh_pts = (m.eoh_pct / 100.0) * current_price;
-        
-        // Calcolo dei punti reali proiettati sull'apertura odierna
         let next_up_pts = (m.next_candle_up_pct.unwrap_or(0.0) / 100.0) * current_price;
         let next_down_pts = (m.next_candle_down_pct.unwrap_or(0.0) / 100.0) * current_price;
-        
-        sum_mfe += up.abs();
-        sum_mae += down.abs();
-        sum_eos += eos;
-        sum_eoh += eoh_pts;
+
+        if up > down.abs() { sess_bullish += 1; }
+        else if down.abs() > up { sess_bearish += 1; }
+
+        mfe_values.push(up.abs());
+        mae_values.push(down.abs());
+        eos_values.push(eos);
+        eoh_values.push(eoh_pts);
 
         response_matches.push(MatchResponse {
             timestamp: m.timestamp,
@@ -277,22 +279,33 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
             down_pts: down,
             eos_pts: eos,
             eoh_pts,
-            next_candle_up: next_up_pts,   // Ora sono punti reali
-            next_candle_down: next_down_pts, // Ora sono punti reali
+            next_candle_up: next_up_pts,
+            next_candle_down: next_down_pts,
         });
     }
 
-    let matches = response_matches;
+    let median = |v: &mut Vec<f32>| -> f32 {
+        if v.is_empty() { return 0.0; }
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v[v.len() / 2]
+    };
 
-    let count = matches.len() as f32;
-    let avg_up = if count > 0.0 { sum_mfe / count } else { 0.0 };
-    let avg_down = if count > 0.0 { sum_mae / count } else { 0.0 };
-    let avg_eos = if count > 0.0 { sum_eos / count } else { 0.0 };
-    let avg_eoh = if !matches.is_empty() { sum_eoh / matches.len() as f32 } else { 0.0 };
-    
-    let long_edge = avg_up / (if avg_down == 0.0 { 1.0 } else { avg_down });
+    let avg_up   = median(&mut mfe_values);
+    let avg_down = median(&mut mae_values);
+    let avg_eos  = median(&mut eos_values);
+    let avg_eoh  = median(&mut eoh_values);
+
+    let long_edge  = avg_up / (if avg_down == 0.0 { 1.0 } else { avg_down });
     let short_edge = avg_down / (if avg_up == 0.0 { 1.0 } else { avg_up });
-    
+
+    let total = (sess_bullish + sess_bearish) as f32;
+    let bias_pct = if total > 0.0 {
+        if sess_bullish >= sess_bearish {
+            sess_bullish as f32 / total * 100.0
+        } else {
+            -(sess_bearish as f32 / total * 100.0)
+        }
+    } else { 0.0 };
 
     (
         AggregateData {
@@ -301,9 +314,9 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
             avg_eos,
             avg_eoh,
             edge_ratio: long_edge.max(short_edge),
-
+            bias_pct,
         },
-        matches
+        response_matches
     )
 }
 
