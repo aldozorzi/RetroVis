@@ -2,9 +2,16 @@ use crate::models::{CandleStore, NormalizedCandle, RawCandle};
 use chrono::{Timelike, TimeZone};
 use chrono_tz::America::New_York;
 use std::str::FromStr;
+use std::borrow::Cow;
 
 pub struct SearchEngine {
     pub dataset: CandleStore,
+}
+
+struct SessionStart {
+    start_idx: usize,
+    day_start_timestamp: u32,
+    target_start_timestamp: u32,
 }
 
 impl SearchEngine {
@@ -55,38 +62,22 @@ impl SearchEngine {
         let len = current_pattern.len();
         let mut outcomes = Vec::new();
 
-        //Extract the actual calendar date from the first candle
         let current_dt = New_York.timestamp_opt(current_pattern[0].timestamp as i64, 0).unwrap();
         let current_date = current_dt.date_naive();
-
         let session_offset_secs = Self::get_ny_seconds_for_session(session, current_date);
 
         for i in 0..self.dataset.len() {
             let (_, raw_day_candles) = match self.dataset.get(i) { Some(d) => d, None => continue };
             if raw_day_candles.is_empty() { continue; }
 
-            // Genera il timeframe al volo se diverso da 5
-            let owned_candles;
-            let candles: &[RawCandle<f32>] = if timeframe == 5 {
-                raw_day_candles
-            } else {
-                owned_candles = crate::parser::resample_slice(raw_day_candles, timeframe);
-                &owned_candles
-            };
+            let candles = Self::maybe_resample(raw_day_candles, timeframe);
 
-            let day_start_timestamp    = candles[0].timestamp;
-            let target_start_timestamp = day_start_timestamp + session_offset_secs;
-
-            let start_idx = match candles.binary_search_by_key(&target_start_timestamp, |c| c.timestamp) {
-                Ok(idx) => idx,
-                Err(idx) => {
-                    if idx < candles.len() {
-                        idx
-                    } else {
-                        continue;
-                    }
-                }
+            let session_start = match Self::find_session_start(&candles, session_offset_secs) {
+                Some(s) => s,
+                None => continue,
             };
+            let SessionStart { start_idx, day_start_timestamp, target_start_timestamp } = session_start;
+
             if candles.len() < start_idx + len { continue; }
 
             let baseline = candles[start_idx].open;
@@ -94,57 +85,32 @@ impl SearchEngine {
                 .iter()
                 .map(|r| NormalizedCandle::from_raw(r, baseline))
                 .collect();
-
             let dist = Self::calculate_distance(current_pattern, &historical_pattern);
 
-            let eoh_timestamp = target_start_timestamp + 3600;
-            let eoh_pct = candles[start_idx..]
-                .iter()
-                .take_while(|c| c.timestamp <= eoh_timestamp)
-                .last()
-                .map(|c| ((c.close - baseline) / baseline) * 100.0);
-
-            let end_idx = if session.id == "LONDON_OPEN" {
-                let london_end = day_start_timestamp + 33900;
-                candles.iter().position(|c| c.timestamp == london_end).unwrap_or(candles.len() - 1)
-            } else {
-                candles.len() - 1
-            };
-            let actual_end = if end_idx > start_idx { end_idx } else { candles.len() - 1 };
-
-            let mut max_high = baseline;
-            let mut min_low  = baseline;
-            let last_close   = candles[actual_end].close;
-            for c in &candles[start_idx..=actual_end] {
-                if c.high > max_high { max_high = c.high; }
-                if c.low  < min_low  { min_low  = c.low;  }
-            }
+            let eoh_pct = Self::eoh_pct(&candles, start_idx, target_start_timestamp, baseline);
+            let actual_end = Self::find_session_end_idx(&candles, session, day_start_timestamp, start_idx);
+            let (max_high, min_low, last_close) = Self::session_extremes(&candles, start_idx, actual_end, baseline);
 
             // --- Calcolo movimento candela successiva (Punto X + 1) ---
             let next_idx = start_idx + len;
-            let (next_up_pct, next_down_pct) = if next_idx < candles.len() {
+            let (next_up_pct, next_down_pct) = if next_idx < candles.len() && baseline > 0.0 {
                 let next_c = &candles[next_idx];
-                
-                if baseline > 0.0 {
-                    (
-                        ((next_c.high - next_c.open) / baseline) * 100.0,
-                        ((next_c.open - next_c.low) / baseline) * 100.0,
-                    )
-                } else {
-                    (0.0, 0.0)
-                }
+                (
+                    Self::pct_diff(next_c.high, next_c.open, baseline),
+                    Self::pct_diff(next_c.open, next_c.low, baseline),
+                )
             } else {
                 (0.0, 0.0)
             };
             // -----------------------------------------------------------------------
 
             outcomes.push(crate::models::MatchOutcome {
-                timestamp:   candles[start_idx].timestamp,
-                distance:    dist,
-                eod_ret_pct: ((last_close - baseline) / baseline) * 100.0,
-                mfe_pct:     ((max_high   - baseline) / baseline) * 100.0,
-                mae_pct:     ((min_low    - baseline) / baseline) * 100.0,
-                eoh_pct:     eoh_pct.unwrap_or(0.0),
+                timestamp: candles[start_idx].timestamp,
+                distance: dist,
+                eod_ret_pct: Self::pct_diff(last_close, baseline, baseline),
+                mfe_pct: Self::pct_diff(max_high, baseline, baseline),
+                mae_pct: Self::pct_diff(min_low, baseline, baseline),
+                eoh_pct,
                 next_candle_up_pct: Some(next_up_pct),
                 next_candle_down_pct: Some(next_down_pct),
             });
@@ -170,118 +136,138 @@ impl SearchEngine {
             None => return Vec::new() 
         };
 
-        // Resampling giorno precedente
-        let owned_prev;
-        let prev = if timeframe_min == 5 || raw_prev.is_empty() {
-            raw_prev
-        } else {
-            owned_prev = crate::parser::resample_slice(raw_prev, timeframe_min);
-            &owned_prev
-        };
+        let prev = Self::maybe_resample(raw_prev, timeframe_min);
+        let curr = Self::maybe_resample(raw_curr, timeframe_min);
 
-        // Resampling giorno corrente
-        let owned_curr;
-        let curr = if timeframe_min == 5 {
-            raw_curr
-        } else {
-            owned_curr = crate::parser::resample_slice(raw_curr, timeframe_min);
-            &owned_curr
-        };
-
-        // Unione e mappatura
         prev.iter().chain(curr.iter()).cloned().collect()
     }
 
     pub fn find_context_matches(
-    &self,
-    current_context: &crate::models::Context,
-    top_k: usize,
-    session: &crate::models::SessionConfig,
-    timestamp: u32,
-) -> Vec<crate::models::MatchOutcome> {
-    let mut outcomes = Vec::new();
+        &self,
+        current_context: &crate::models::Context,
+        top_k: usize,
+        session: &crate::models::SessionConfig,
+        timestamp: u32,
+    ) -> Vec<crate::models::MatchOutcome> {
+        let mut outcomes = Vec::new();
 
-    let current_dt = New_York.timestamp_opt(timestamp as i64, 0).unwrap();
-    let current_date = current_dt.date_naive();
+        let current_dt = New_York.timestamp_opt(timestamp as i64, 0).unwrap();
+        let current_date = current_dt.date_naive();
+        let session_offset_secs = Self::get_ny_seconds_for_session(session, current_date);
 
-    let session_offset_secs = Self::get_ny_seconds_for_session(session, current_date);
+        for i in 1..self.dataset.len() {
+            let (_, candles)      = match self.dataset.get(i)     { Some(d) => d, None => continue };
+            let (_, prev_candles) = match self.dataset.get(i - 1) { Some(d) => d, None => continue };
+            if candles.is_empty() { continue; }
 
-    for i in 1..self.dataset.len() {
-        let (_, candles)      = match self.dataset.get(i)     { Some(d) => d, None => continue };
-        let (_, prev_candles) = match self.dataset.get(i - 1) { Some(d) => d, None => continue };
-        if candles.is_empty() { continue; }
+            let session_start = match Self::find_session_start(&candles, session_offset_secs) {
+                Some(s) => s,
+                None => continue,
+            };
+            let SessionStart { start_idx, day_start_timestamp, target_start_timestamp } = session_start;
 
+            let prev_close = match prev_candles.last() { Some(c) => c.close, None => continue };
+            let prev_high  = prev_candles.iter().map(|c| c.high).fold(f32::NEG_INFINITY, f32::max);
+            let prev_low   = prev_candles.iter().map(|c| c.low).fold(f32::INFINITY,     f32::min);
+
+            let (intraday_high, intraday_low) = if start_idx == 0 {
+                let open = candles[0].open;
+                (open, open)
+            } else {
+                let h = candles[0..start_idx].iter().map(|c| c.high).fold(f32::NEG_INFINITY, f32::max);
+                let l = candles[0..start_idx].iter().map(|c| c.low).fold(f32::INFINITY,     f32::min);
+                (h, l)
+            };
+
+            let session_open = candles[start_idx].open;
+            let hist_context = crate::models::Context::new(
+                session_open, prev_close, prev_high, prev_low, intraday_high, intraday_low,
+            );
+
+            let dist     = current_context.distance(&hist_context);
+            let baseline = session_open;
+
+            let eoh_pct = Self::eoh_pct(&candles, start_idx, target_start_timestamp, baseline);
+            let actual_end = Self::find_session_end_idx(&candles, session, day_start_timestamp, start_idx);
+            let (max_high, min_low, last_close) = Self::session_extremes(&candles, start_idx, actual_end, baseline);
+
+            outcomes.push(crate::models::MatchOutcome {
+                timestamp: candles[start_idx].timestamp,
+                distance: dist,
+                eod_ret_pct: Self::pct_diff(last_close, baseline, baseline),
+                mfe_pct: Self::pct_diff(max_high, baseline, baseline),
+                mae_pct: Self::pct_diff(min_low, baseline, baseline),
+                eoh_pct,
+                next_candle_up_pct: None,
+                next_candle_down_pct: None,
+            });
+        }
+
+        outcomes.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+        outcomes.into_iter().take(top_k).collect()
+    }
+
+    fn find_session_start(candles: &[RawCandle<f32>], session_offset_secs: u32) -> Option<SessionStart> {
         let day_start_timestamp = candles[0].timestamp;
         let target_start_timestamp = day_start_timestamp + session_offset_secs;
-
         let start_idx = match candles.binary_search_by_key(&target_start_timestamp, |c| c.timestamp) {
             Ok(idx) => idx,
-            Err(idx) => {
-                if idx < candles.len() {
-                    idx
-                } else {
-                    continue;
-                }
-            }
+            Err(idx) if idx < candles.len() => idx,
+            Err(_) => return None,
         };
+        Some(SessionStart { start_idx, day_start_timestamp, target_start_timestamp })
+    }
 
-        let prev_close = match prev_candles.last() { Some(c) => c.close, None => continue };
-        let prev_high  = prev_candles.iter().map(|c| c.high).fold(f32::NEG_INFINITY, f32::max);
-        let prev_low   = prev_candles.iter().map(|c| c.low).fold(f32::INFINITY,     f32::min);
-
-        let (intraday_high, intraday_low) = if start_idx == 0 {
-            let open = candles[0].open;
-            (open, open)
-        } else {
-            let h = candles[0..start_idx].iter().map(|c| c.high).fold(f32::NEG_INFINITY, f32::max);
-            let l = candles[0..start_idx].iter().map(|c| c.low).fold(f32::INFINITY,     f32::min);
-            (h, l)
-        };
-
-        let session_open = candles[start_idx].open;
-        let hist_context = crate::models::Context::new(
-            session_open, prev_close, prev_high, prev_low, intraday_high, intraday_low,
-        );
-
-        let dist          = current_context.distance(&hist_context);
-        let baseline      = session_open;
-        let eoh_timestamp = target_start_timestamp + 3600;
-
-        let eoh_pct = candles[start_idx..]
-            .iter()
-            .take_while(|c| c.timestamp <= eoh_timestamp)
-            .last()
-            .map(|c| ((c.close - baseline) / baseline) * 100.0);
-
+    fn find_session_end_idx(
+        candles: &[RawCandle<f32>],
+        session: &crate::models::SessionConfig,
+        day_start_timestamp: u32,
+        start_idx: usize,
+    ) -> usize {
         let end_idx = if session.id == "LONDON_OPEN" {
             let london_end = day_start_timestamp + 33900;
             candles.iter().position(|c| c.timestamp == london_end).unwrap_or(candles.len() - 1)
         } else {
             candles.len() - 1
         };
-        let actual_end = if end_idx > start_idx { end_idx } else { candles.len() - 1 };
+        if end_idx > start_idx { end_idx } else { candles.len() - 1 }
+    }
 
+    fn session_extremes(
+        candles: &[RawCandle<f32>],
+        start_idx: usize,
+        actual_end: usize,
+        baseline: f32,
+    ) -> (f32, f32, f32) {
         let mut max_high = baseline;
         let mut min_low  = baseline;
-        let last_close   = candles[actual_end].close;
         for c in &candles[start_idx..=actual_end] {
             if c.high > max_high { max_high = c.high; }
             if c.low  < min_low  { min_low  = c.low;  }
         }
-
-        outcomes.push(crate::models::MatchOutcome {
-            timestamp:   candles[start_idx].timestamp,
-            distance:    dist,
-            eod_ret_pct: ((last_close - baseline) / baseline) * 100.0,
-            mfe_pct:     ((max_high   - baseline) / baseline) * 100.0,
-            mae_pct:     ((min_low    - baseline) / baseline) * 100.0,
-            eoh_pct:     eoh_pct.unwrap_or(0.0),
-            next_candle_up_pct: None, // Non calcolato in questo contesto
-            next_candle_down_pct: None, // Non calcolato in questo contesto
-        });
+        (max_high, min_low, candles[actual_end].close)
     }
 
-    outcomes.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
-    outcomes.into_iter().take(top_k).collect()
-}
+    fn eoh_pct(candles: &[RawCandle<f32>], start_idx: usize, target_start_timestamp: u32, baseline: f32) -> f32 {
+        let eoh_timestamp = target_start_timestamp + 3600;
+        candles[start_idx..]
+            .iter()
+            .take_while(|c| c.timestamp <= eoh_timestamp)
+            .last()
+            .map(|c| Self::pct_diff(c.close, baseline, baseline))
+            .unwrap_or(0.0)
+    }
+
+    #[inline]
+    fn pct_diff(a: f32, b: f32, baseline: f32) -> f32 {
+        ((a - b) / baseline) * 100.0
+    }
+
+    fn maybe_resample<'a>(raw: &'a [RawCandle<f32>], timeframe_min: u32) -> Cow<'a, [RawCandle<f32>]> {
+        if timeframe_min == 5 {
+            Cow::Borrowed(raw)
+        } else {
+            Cow::Owned(crate::parser::resample_slice(raw, timeframe_min))
+        }
+    }
 }
