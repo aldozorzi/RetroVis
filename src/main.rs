@@ -20,6 +20,7 @@ mod parser;
 mod engine;
 mod cache;
 mod gemini;
+mod stats; 
 //mod claude;
 //mod ollama;
 mod determination_engine;
@@ -30,6 +31,7 @@ mod ai_provider;
 mod http_client;
 
 use models::{QueryRequest,AppState,MatchesResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey,AiAnalysisService, RawCandle};
+use stats::{median, edge_ratio, bias_pct}; 
 use crate::ai_provider::AiProvider;
 //use crate::oanda::candle_start_utc_ny_row;
 use gemini::GeminiBroker;
@@ -115,7 +117,7 @@ async fn shutdown_signal() {
 
 async fn search_handler(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<QueryRequest<f32>>,
+    Json(req): Json<QueryRequest>,
 ) -> Json<MatchesResponse> {
     let history = compute_candle_history(
         &state, &req.symbol, &req.timeframe, &req.session_id,
@@ -252,9 +254,8 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
     let mut mae_values: Vec<f32> = Vec::new();
     let mut eos_values: Vec<f32> = Vec::new();
     let mut eoh_values: Vec<f32> = Vec::new();
+    let mut up_down_pairs: Vec<(f32, f32)> = Vec::new();
     let mut response_matches = Vec::with_capacity(matches.len());
-    let mut sess_bullish = 0usize;
-    let mut sess_bearish = 0usize;
 
     for m in matches.iter() {
         let up = (m.mfe_pct / 100.0) * current_price;
@@ -264,8 +265,7 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
         let next_up_pts = (m.next_candle_up_pct.unwrap_or(0.0) / 100.0) * current_price;
         let next_down_pts = (m.next_candle_down_pct.unwrap_or(0.0) / 100.0) * current_price;
 
-        if up > down.abs() { sess_bullish += 1; }
-        else if down.abs() > up { sess_bearish += 1; }
+        up_down_pairs.push((up, down.abs()));
 
         mfe_values.push(up.abs());
         mae_values.push(down.abs());
@@ -284,28 +284,10 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
         });
     }
 
-    let median = |v: &mut Vec<f32>| -> f32 {
-        if v.is_empty() { return 0.0; }
-        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        v[v.len() / 2]
-    };
-
     let avg_up   = median(&mut mfe_values);
     let avg_down = median(&mut mae_values);
     let avg_eos  = median(&mut eos_values);
     let avg_eoh  = median(&mut eoh_values);
-
-    let long_edge  = avg_up / (if avg_down == 0.0 { 1.0 } else { avg_down });
-    let short_edge = avg_down / (if avg_up == 0.0 { 1.0 } else { avg_up });
-
-    let total = (sess_bullish + sess_bearish) as f32;
-    let bias_pct = if total > 0.0 {
-        if sess_bullish >= sess_bearish {
-            sess_bullish as f32 / total * 100.0
-        } else {
-            -(sess_bearish as f32 / total * 100.0)
-        }
-    } else { 0.0 };
 
     (
         AggregateData {
@@ -313,8 +295,8 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
             avg_down,
             avg_eos,
             avg_eoh,
-            edge_ratio: long_edge.max(short_edge),
-            bias_pct,
+            edge_ratio: edge_ratio(avg_up, avg_down),
+            bias_pct: bias_pct(up_down_pairs),
         },
         response_matches
     )
@@ -323,7 +305,7 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
 async fn day_details_handler(
     State(state): State<Arc<AppState>>,
     Query(params): Query<HashMap<String, String>>,
-) -> Json<Vec<models::ChartDataResponse>> {
+) -> Json<Vec<RawCandle<f32>>> { 
     let symbol = params.get("symbol").cloned().unwrap_or_else(|| "NQ".to_string());
     let date_str = params.get("date").cloned().unwrap_or_default();
     let date: u32 = date_str.replace('-', "").parse().unwrap_or(0);
@@ -332,7 +314,7 @@ async fn day_details_handler(
     let timeframe_min = (timeframe_seconds / 60) as u32;
 
     if let Some(engine) = state.engines.get(&symbol) {
-        return Json(engine.get_day_candles(date,timeframe_min, true));
+        return Json(engine.get_day_candles(date, timeframe_min, true));
     }
 
     Json(vec![])

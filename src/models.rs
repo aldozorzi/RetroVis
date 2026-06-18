@@ -8,6 +8,8 @@ use crate::cache::RetroVisCache;
 use tokio::sync::broadcast;
 use crate::ai_provider::AiProvider;
 use std::ops::Range;
+use crate::stats::{median, edge_ratio, bias_pct};
+
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RawCandle<T> {
@@ -69,10 +71,10 @@ pub struct SessionConfig {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct QueryRequest<T> {
+pub struct QueryRequest {
     pub symbol: String,
     pub session_id: String,
-    pub candles: Vec<RawCandle<T>>,
+    pub candles: Vec<RawCandle<f32>>,
     pub top_k: usize,
     pub timestamp: u32,
     pub timeframe: String,
@@ -99,27 +101,15 @@ pub struct MatchesResponse {
 impl From<CachedResult> for MatchesResponse {
     fn from(cached: CachedResult) -> Self {
         Self {
-            summary: AggregateData {
-                avg_up: cached.avg_up,
-                avg_down: cached.avg_down,
-                avg_eos: cached.avg_eos,
-                edge_ratio: cached.edge_ratio,
-                avg_eoh: cached.avg_eoh,
-                bias_pct: cached.session_bias_pct,
-            },
-            matches: cached.matches.iter().cloned().map(MatchResponse::from).collect(),
-            next_candle: NextCandleData {
-                avg_up: cached.avg_next_up,
-                avg_down: cached.avg_next_down,
-                edge_ratio: cached.next_edge_ratio,
-                bias_pct: cached.next_bias_pct
-            },
+            summary: cached.summary,
+            matches: (*cached.matches).clone(),
+            next_candle: cached.next_candle,
         }
     }
 }
 
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct MatchResponse {
     pub timestamp: u32,
     pub similarity: f32,
@@ -131,22 +121,7 @@ pub struct MatchResponse {
     pub next_candle_down: f32,
 }
 
-impl From<HistoricalMatch> for MatchResponse {
-    fn from(m: HistoricalMatch) -> Self {
-        Self {
-            timestamp: m.timestamp as u32,
-            similarity: m.match_score as f32,
-            up_pts: m.up as f32,
-            down_pts: m.down as f32,
-            eos_pts: m.eos as f32,
-            eoh_pts: m.eoh as f32,
-            next_candle_up: m.next_candle_up_pct,
-            next_candle_down: m.next_candle_down_pct,
-        }
-    }
-}
-
-#[derive(Debug, serde::Serialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct AggregateData {
     pub avg_up: f32,
     pub avg_down: f32,
@@ -173,15 +148,6 @@ pub struct AppState {
     pub broker: Arc<dyn AiProvider>,
     pub ai_service: Arc<AiAnalysisService>,
     // pub oanda: Arc<crate::oanda::OandaClient>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ChartDataResponse {
-    pub timestamp: u32,
-    pub open: f32,
-    pub high: f32,
-    pub low: f32,
-    pub close: f32,
 }
 
 pub struct Context {
@@ -244,17 +210,11 @@ pub struct CandleCacheKey {
 }
 impl CandleCacheKey {
     pub fn new(asset_str: &str, timeframe_str: &str, timestamp: u32) -> Self {
-        let mut asset = [0u8; 8];
-        let src_a = asset_str.as_bytes();
-        let amt_a = src_a.len().min(8);
-        asset[..amt_a].copy_from_slice(&src_a[..amt_a]);
-
-        let mut timeframe = [0u8; 4];
-        let src_t = timeframe_str.as_bytes();
-        let amt_t = src_t.len().min(4);
-        timeframe[..amt_t].copy_from_slice(&src_t[..amt_t]);
-
-        Self { asset, timeframe, timestamp }
+        Self {
+            asset: str_to_fixed(asset_str),
+            timeframe: str_to_fixed(timeframe_str),
+            timestamp,
+        }
     }
 }
 
@@ -265,105 +225,41 @@ pub struct ContextCacheKey {
 }
 impl ContextCacheKey {
     pub fn new(asset_str: &str, timestamp: u32) -> Self {
-        let mut asset = [0u8; 8];
-        let src = asset_str.as_bytes();
-        let amt = src.len().min(8);
-        asset[..amt].copy_from_slice(&src[..amt]);
-
-        Self { asset, timestamp }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct HistoricalMatch {
-    pub timestamp: u32,      
-    pub match_score: f32,  
-    pub up: f32,           
-    pub down: f32,        
-    pub eos: f32,        
-    pub eoh: f32, 
-    pub next_candle_up_pct: f32,
-    pub next_candle_down_pct: f32,      
-}
-
-impl From<MatchResponse> for HistoricalMatch {
-    fn from(m: MatchResponse) -> Self {
         Self {
-            timestamp: m.timestamp as u32,
-            match_score: m.similarity,
-            up: m.up_pts,
-            down: m.down_pts,
-            eos: m.eos_pts,
-            eoh: m.eoh_pts,
-            next_candle_up_pct: m.next_candle_up,
-            next_candle_down_pct: m.next_candle_down,
+            asset: str_to_fixed(asset_str),
+            timestamp,
         }
     }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CachedResult {
-    pub edge_ratio: f32,
-    pub avg_eos: f32,
-    pub avg_up: f32,
-    pub avg_down: f32,
-    pub matches: Arc<Vec<HistoricalMatch>>,
+    pub summary: AggregateData,
+    pub matches: Arc<Vec<MatchResponse>>,
     pub ai_analysis: Option<Arc<String>>,
-    pub avg_eoh: f32,
-    pub avg_next_up: f32, 
-    pub avg_next_down: f32,
-    pub next_edge_ratio: f32,
-    pub next_bias_pct: f32,
-    pub session_bias_pct: f32,
+    pub next_candle: NextCandleData,
 }
 
 impl CachedResult {
     pub fn from_aggregates(summary: AggregateData, matches: Vec<MatchResponse>) -> Self {
-        let (avg_next_up, avg_next_down) = if !matches.is_empty() {
-            let mut ups: Vec<f32> = matches.iter().map(|m| m.next_candle_up).collect();
-            let mut downs: Vec<f32> = matches.iter().map(|m| m.next_candle_down).collect();
-            ups.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            downs.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            (ups[ups.len() / 2], downs[downs.len() / 2])
-        } else {
-            (0.0, 0.0)
-        };
+        let mut ups: Vec<f32>   = matches.iter().map(|m| m.next_candle_up).collect();
+        let mut downs: Vec<f32> = matches.iter().map(|m| m.next_candle_down).collect();
 
-        let long_edge = avg_next_up / (if avg_next_down == 0.0 { 1.0 } else { avg_next_down });
-        let short_edge = avg_next_down / (if avg_next_up == 0.0 { 1.0 } else { avg_next_up });
-        let next_edge_ratio = long_edge.max(short_edge);
-
-        let mut next_bullish = 0usize;
-        let mut next_bearish = 0usize;
-        for m in matches.iter() {
-            if m.next_candle_up > m.next_candle_down { next_bullish += 1; }
-            else if m.next_candle_down > m.next_candle_up { next_bearish += 1; }
-        }
-
-        let next_total = (next_bullish + next_bearish) as f32;
-        let next_bias_pct = if next_total > 0.0 {
-            if next_bullish >= next_bearish {
-                next_bullish as f32 / next_total * 100.0
-            } else {
-                -(next_bearish as f32 / next_total * 100.0)
-            }
-        } else { 0.0 };
-
-        let historical_matches: Vec<HistoricalMatch> = matches.into_iter().map(HistoricalMatch::from).collect();
+        let avg_next_up   = median(&mut ups);
+        let avg_next_down = median(&mut downs);
+        let next_edge_ratio = edge_ratio(avg_next_up, avg_next_down);
+        let next_bias_pct = bias_pct(matches.iter().map(|m| (m.next_candle_up, m.next_candle_down)));
 
         Self {
-            edge_ratio: summary.edge_ratio,
-            avg_eos: summary.avg_eos,
-            avg_up: summary.avg_up,
-            avg_down: summary.avg_down,
-            avg_eoh: summary.avg_eoh,
-            matches: Arc::new(historical_matches),
+            summary,
+            matches: Arc::new(matches),
             ai_analysis: None,
-            avg_next_up,
-            avg_next_down,
-            next_edge_ratio,
-            next_bias_pct,
-            session_bias_pct: summary.bias_pct,
+            next_candle: NextCandleData {
+                avg_up: avg_next_up,
+                avg_down: avg_next_down,
+                edge_ratio: next_edge_ratio,
+                bias_pct: next_bias_pct,
+            },
         }
     }
 }
@@ -401,4 +297,12 @@ where
 {
     // Usa .round() se vuoi arrotondare, oppure rimuovilo se vuoi solo troncare
     serializer.serialize_i32(value.round() as i32)
+}
+
+fn str_to_fixed<const N: usize>(s: &str) -> [u8; N] {
+    let mut buf = [0u8; N];
+    let src = s.as_bytes();
+    let amt = src.len().min(N);
+    buf[..amt].copy_from_slice(&src[..amt]);
+    buf
 }

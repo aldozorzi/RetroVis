@@ -154,7 +154,7 @@ impl SearchEngine {
         outcomes.into_iter().take(top_k).collect()
     }
 
-    pub fn get_day_candles(&self, date: u32, timeframe_min: u32, include_prev: bool ) -> Vec<crate::models::ChartDataResponse> {
+    pub fn get_day_candles(&self, date: u32, timeframe_min: u32, include_prev: bool) -> Vec<crate::models::RawCandle<f32>> {
         let pos = match self.dataset.find_by_date(date) { 
         Some(p) => p, 
         None => return Vec::new() 
@@ -189,12 +189,7 @@ impl SearchEngine {
         };
 
         // Unione e mappatura
-        prev.iter().chain(curr.iter())
-            .map(|c| crate::models::ChartDataResponse {
-                timestamp: c.timestamp,
-                open: c.open, high: c.high, low: c.low, close: c.close,
-            })
-            .collect()
+        prev.iter().chain(curr.iter()).cloned().collect()
     }
 
     pub fn find_context_matches(
