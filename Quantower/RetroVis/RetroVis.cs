@@ -88,7 +88,7 @@ public class RetroVis : Indicator
     private Font headerFont = new Font("Consolas", 11, FontStyle.Bold);
     private Font bodyFont = new Font("Consolas", 10);
     private SolidBrush panelBgBrush = new SolidBrush(Color.FromArgb(220, 10, 10, 10));
-    private SolidBrush ctxBgBrush = new SolidBrush(Color.FromArgb(0, 180, 100, 30));
+    private SolidBrush matchBgBrush = new SolidBrush(Color.FromArgb(0, 180, 100, 30));
     private Pen upPen = new Pen(Color.LimeGreen, 2);
     private Pen downPen = new Pen(Color.Sienna, 2);
 
@@ -543,7 +543,9 @@ public class RetroVis : Indicator
 
             foreach (var m in candlesResults)
             {
-                matchClickAreas.Add(new RectangleF(tx, ty, panelRect.Width - 30, 50));
+                var matchRect = new RectangleF(tx, ty, panelRect.Width - 24, 18);
+                gr.FillRectangle(matchBgBrush, matchRect);
+                matchClickAreas.Add(matchRect);
 
                 DateTime matchDt = DateTimeOffset.FromUnixTimeSeconds(m.Timestamp).DateTime;
                 string dateStr = matchDt.ToString("yyyy-MM-dd");
@@ -551,15 +553,8 @@ public class RetroVis : Indicator
                 matchDates.Add(dateStr);
 
                 gr.DrawString($"{dateStr} (MATCH:{m.Similarity:F1}%)", dataFont, Brushes.Gray, tx, ty);
-                ty += 15;
 
-                string vals = $"SESS UP: {m.UpPts:+0.0} | DOWN: {m.DownPts:0.0}";
-                gr.DrawString(vals, dataFont, Brushes.White, tx + 10, ty);
-                ty += 15;
-                vals = $"NXT U:+{m.NextCandleUp:0.0} | D:-{m.NextCandleDown:0.0}";
-                gr.DrawString(vals, dataFont, Brushes.White, tx + 10, ty);
-
-                ty += 25;
+                ty += 18;
             }
         }
         
@@ -590,8 +585,8 @@ public class RetroVis : Indicator
             foreach (var m in contextResults)
             {
 
-                var ctxRect = new RectangleF(tx, ty, panelRect.Width - 24, 32);
-                gr.FillRectangle(ctxBgBrush, ctxRect);
+                var ctxRect = new RectangleF(tx, ty, panelRect.Width - 24, 18);
+                gr.FillRectangle(matchBgBrush, ctxRect);
                 contextClickAreas.Add(ctxRect);
 
                 DateTime matchDt = DateTimeOffset.FromUnixTimeSeconds(m.Timestamp).DateTime;
@@ -600,11 +595,8 @@ public class RetroVis : Indicator
                 contextDates.Add(dateStr);
 
                 gr.DrawString($"{dateStr} (MATCH:{m.Similarity:F1}%)", dataFont, Brushes.Gray, tx, ty);
-                ty += 15;
+                ty += 18;
 
-                string vals = $"UP: {m.UpPts:+0.0}  DOWN: {m.DownPts:0.0}";
-                gr.DrawString(vals, dataFont, Brushes.White, tx + 10, ty);
-                ty += 25;
             }
             
         }
