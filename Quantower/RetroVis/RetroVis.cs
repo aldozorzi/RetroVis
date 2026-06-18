@@ -28,7 +28,7 @@ public class RetroVis : Indicator
     public int MinCandles = 1;
 
     [InputParameter("Max Candles for Pattern", 2, 1, 20, 1)]
-    public int MaxCandles = 12;
+    public int MaxCandles = 6;
 
     [InputParameter("Webserver URL", 3)]
     public string ServerUrl = "http://127.0.0.1:9999";

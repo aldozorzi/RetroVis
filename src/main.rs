@@ -24,10 +24,11 @@ mod ai_analysis;
 mod ai_provider;
 mod http_client;
 
-use models::{QueryRequest,AppState,MatchesResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey,AiAnalysisService, RawCandle, SessionConfig, SearchEngine};
+use models::{QueryRequest,AppState,MatchesResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey,AiAnalysisService, RawCandle, SessionConfig};
 use stats::{median, edge_ratio, bias_pct}; 
 use crate::ai_provider::AiProvider;
 use gemini::GeminiBroker;
+use engine::SearchEngine;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -63,8 +64,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cache = Arc::new(cache::RetroVisCache::new());
     let broker: Arc<dyn AiProvider> = Arc::new(GeminiBroker::new(env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY")));
-    //let broker: Arc<dyn AiProvider> = Arc::new(ClaudeBroker::new(env::var("CLAUDE_API_KEY").expect("CLAUDE_API_KEY")));
-    //let broker: Arc<dyn AiProvider> = Arc::new(OllamaBroker::new());
     let ai_service = Arc::new(AiAnalysisService::new(
         broker.clone(), 
         cache.clone()
