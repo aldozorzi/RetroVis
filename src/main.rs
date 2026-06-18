@@ -4,7 +4,6 @@ use axum::{
     Json,
     Router,
     response::{Html, IntoResponse},
-    //http::StatusCode,
 };
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -13,7 +12,6 @@ use serde_json::json;
 use dotenvy::dotenv;
 use std::env;
 use std::thread;
-//use chrono::DateTime;
 
 mod models;
 mod parser;
@@ -21,23 +19,15 @@ mod engine;
 mod cache;
 mod gemini;
 mod stats; 
-//mod claude;
-//mod ollama;
 mod determination_engine;
 mod ai_analysis;
-//mod oanda;
-//mod full_search;
 mod ai_provider;
 mod http_client;
 
-use models::{QueryRequest,AppState,MatchesResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey,AiAnalysisService, RawCandle};
+use models::{QueryRequest,AppState,MatchesResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey,AiAnalysisService, RawCandle, SessionConfig, SearchEngine};
 use stats::{median, edge_ratio, bias_pct}; 
 use crate::ai_provider::AiProvider;
-//use crate::oanda::candle_start_utc_ny_row;
 use gemini::GeminiBroker;
-//use claude::ClaudeBroker;
-//use ollama::OllamaBroker;
-use engine::SearchEngine;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -91,7 +81,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/search", post(search_handler))
-        //.route("/full-search", post(full_search_handler))
         .route("/day-details", get(day_details_handler))
         .route("/visualize", get(visualize_handler))
         .route("/context-search", post(context_matches_handler))
@@ -196,8 +185,7 @@ fn compute_candle_history(
     top_k: usize,
 ) -> Vec<CachedResult> {
     let timeframe_seconds = crate::cache::RetroVisCache::timeframe_to_seconds(timeframe);
-    let engine  = state.engines.get(symbol).expect("Ticker not found");
-    let session = state.sessions.get(session_id).expect("Session not found");
+    let (engine, session) = lookup_engine_and_session(state, symbol, session_id);
 
     (1..=candles.len()).map(|i| {
         let slice      = &candles[0..i];
@@ -233,8 +221,7 @@ fn compute_context(
     intraday_low: f32,
     top_k: usize,
 ) -> CachedResult {
-    let engine  = state.engines.get(symbol).expect("Ticker not found");
-    let session = state.sessions.get(session_id).expect("Session not found");
+    let (engine, session) = lookup_engine_and_session(state, symbol, session_id);
 
     state.cache.get_or_calculate_context(symbol, timestamp, || {
         let ctx = Context::new(
@@ -300,6 +287,16 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
         },
         response_matches
     )
+}
+
+fn lookup_engine_and_session<'a>(
+    state: &'a AppState,
+    symbol: &str,
+    session_id: &str,
+) -> (&'a SearchEngine, &'a SessionConfig) {
+    let engine = state.engines.get(symbol).expect("Ticker not found");
+    let session = state.sessions.get(session_id).expect("Session not found");
+    (engine, session)
 }
 
 async fn day_details_handler(
