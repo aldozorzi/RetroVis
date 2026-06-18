@@ -53,7 +53,7 @@ pub fn load_and_process(path: &str, symbol: &str) -> Result<CandleStore, Box<dyn
     }
     candles.shrink_to_fit();
     days.shrink_to_fit();
-    println!("{} - {} giorni, {} candele", symbol, days.len(), candles.len());
+    println!("{} - {} days, {} candles", symbol, days.len(), candles.len());
     Ok(CandleStore { candles, days })
 }
 

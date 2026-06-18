@@ -85,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/context-search", post(context_matches_handler))
         .route("/get-ai-analysis", post(ai_analysis_handler))
         .with_state(shared_state);
-    println!("Server in ascolto su http://127.0.0.1:9999");
+    println!("Server listening at http://127.0.0.1:9999");
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 9999));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app)
