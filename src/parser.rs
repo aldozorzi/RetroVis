@@ -101,20 +101,24 @@ fn parse_date_to_u32(bytes: &[u8]) -> Option<u32> {
     Some(year * 10000 + month * 100 + day)
 }
 
+/// Computes a Unix timestamp directly from raw CSV bytes, bypassing chrono's
+/// string parsing. This runs once per row over ~800k rows during load, so
+/// skipping allocation/parsing overhead here meaningfully speeds up startup.
+/// Uses Howard Hinnant's days-from-civil algorithm for the date math.
 fn calculate_timestamp(date_bytes: &[u8], time_bytes: &[u8]) -> u32 {
     if date_bytes.len() < 10 || time_bytes.len() < 8 { return 0; }
 
-    // Estrazione numerica della data (YYYY-MM-DD) convertendo in i64
+    // Parse date (YYYY-MM-DD) as integers, avoiding string allocation.
     let year = ((date_bytes[0] - b'0') as i64 * 1000) + ((date_bytes[1] - b'0') as i64 * 100) + ((date_bytes[2] - b'0') as i64 * 10) + (date_bytes[3] - b'0') as i64;
     let month = ((date_bytes[5] - b'0') as i64 * 10) + (date_bytes[6] - b'0') as i64;
     let day = ((date_bytes[8] - b'0') as i64 * 10) + (date_bytes[9] - b'0') as i64;
 
-    // Estrazione numerica dell'orario (HH:MM:SS) convertendo in i64
+    // Parse time (HH:MM:SS) the same way.
     let hour = ((time_bytes[0] - b'0') as i64 * 10) + (time_bytes[1] - b'0') as i64;
     let minute = ((time_bytes[3] - b'0') as i64 * 10) + (time_bytes[4] - b'0') as i64;
     let second = ((time_bytes[6] - b'0') as i64 * 10) + (time_bytes[7] - b'0') as i64;
 
-    // Formula per i giorni cumulativi
+    // Days-since-epoch via the civil calendar algorithm (handles leap years without branching).
     let mut y = year;
     if month <= 2 { y -= 1; }
     let era = y / 400;
@@ -122,10 +126,10 @@ fn calculate_timestamp(date_bytes: &[u8], time_bytes: &[u8]) -> u32 {
     let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
     let doe = y_in_era * 365 + y_in_era / 4 - y_in_era / 100 + doy;
     let days_since_zero = era * 146097 + doe as i64;
-    
-    // Sottraiamo i giorni tra l'anno 0 e il 1970 (719468 giorni)
+
+    // 719468 = days between year 0 and 1970-01-01 (the Unix epoch).
     let days_since_1970 = days_since_zero - 719468;
 
-    // Conversione in secondi
+    // Convert to seconds.
     ((days_since_1970 * 86400) + (hour * 3600) + (minute * 60) + second) as u32
 }

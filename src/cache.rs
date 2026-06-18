@@ -95,11 +95,9 @@ impl RetroVisCache {
             .and_utc()
             .timestamp() as u32;
 
-        // carica il valore attuale senza lock
         let last = self.last_eviction.load(std::sync::atomic::Ordering::Relaxed);
 
         if last < today_start {
-            // nuovo giorno — aggiorna il marker ed esegui la pulizia
             self.last_eviction.store(today_start, std::sync::atomic::Ordering::Relaxed);
             self.candle_results.retain(|k, _| k.timestamp >= today_start);
             self.context_results.retain(|k, _| k.timestamp >= today_start);

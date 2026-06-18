@@ -4,6 +4,16 @@ use chrono_tz::America::New_York;
 use std::str::FromStr;
 use std::borrow::Cow;
 
+// CSV market data files are stored at 5-minute native resolution.
+const NATIVE_TIMEFRAME_MIN: u32 = 5;
+
+// Window used to sample "end of hour" price action shortly after a session opens.
+const END_OF_HOUR_WINDOW_SECS: u32 = 3_600;
+
+// Duration of the LONDON_OPEN session window, measured from the start
+// of that day's data (not from the session's opening time itself).
+const LONDON_SESSION_WINDOW_SECS: u32 = 33_900; // 9h 25m
+
 pub struct SearchEngine {
     pub dataset: CandleStore,
 }
@@ -24,7 +34,7 @@ impl SearchEngine {
         let session_tz = chrono_tz::Tz::from_str(&session.timezone)
             .unwrap_or(chrono_tz::Europe::London);
 
-        // Use the actual processing date to dynamic calculate DST shifts
+        // Use the actual processing date to dynamically calculate DST shifts
         let session_datetime = current_date.and_time(session.start_time);
 
         let localized_session = match session_tz.from_local_datetime(&session_datetime).single() {
@@ -91,7 +101,7 @@ impl SearchEngine {
             let actual_end = Self::find_session_end_idx(&candles, session, day_start_timestamp, start_idx);
             let (max_high, min_low, last_close) = Self::session_extremes(&candles, start_idx, actual_end, baseline);
 
-            // --- Calcolo movimento candela successiva (Punto X + 1) ---
+            // Price action of the candle immediately after the matched pattern (point X + 1).
             let next_idx = start_idx + len;
             let (next_up_pct, next_down_pct) = if next_idx < candles.len() && baseline > 0.0 {
                 let next_c = &candles[next_idx];
@@ -198,6 +208,7 @@ impl SearchEngine {
                 mfe_pct: Self::pct_diff(max_high, baseline, baseline),
                 mae_pct: Self::pct_diff(min_low, baseline, baseline),
                 eoh_pct,
+                // Context matching has no fixed pattern length, so there's no well-defined "next candle" index here.
                 next_candle_up_pct: None,
                 next_candle_down_pct: None,
             });
@@ -225,7 +236,7 @@ impl SearchEngine {
         start_idx: usize,
     ) -> usize {
         let end_idx = if session.id == "LONDON_OPEN" {
-            let london_end = day_start_timestamp + 33900;
+            let london_end = day_start_timestamp + LONDON_SESSION_WINDOW_SECS;
             candles.iter().position(|c| c.timestamp == london_end).unwrap_or(candles.len() - 1)
         } else {
             candles.len() - 1
@@ -249,7 +260,7 @@ impl SearchEngine {
     }
 
     fn eoh_pct(candles: &[RawCandle<f32>], start_idx: usize, target_start_timestamp: u32, baseline: f32) -> f32 {
-        let eoh_timestamp = target_start_timestamp + 3600;
+        let eoh_timestamp = target_start_timestamp + END_OF_HOUR_WINDOW_SECS;
         candles[start_idx..]
             .iter()
             .take_while(|c| c.timestamp <= eoh_timestamp)
@@ -263,8 +274,11 @@ impl SearchEngine {
         ((a - b) / baseline) * 100.0
     }
 
+
+    // CSV files are stored at 5-minute native resolution — resampling only
+    // kicks in when the caller asks for a coarser timeframe.
     fn maybe_resample<'a>(raw: &'a [RawCandle<f32>], timeframe_min: u32) -> Cow<'a, [RawCandle<f32>]> {
-        if timeframe_min == 5 {
+        if timeframe_min == NATIVE_TIMEFRAME_MIN {
             Cow::Borrowed(raw)
         } else {
             Cow::Owned(crate::parser::resample_slice(raw, timeframe_min))

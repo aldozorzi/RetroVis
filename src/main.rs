@@ -120,12 +120,48 @@ async fn context_matches_handler(
 ) -> Json<MatchesResponse> {
     let result = compute_context(
         &state, &req.symbol, &req.session_id,
-        req.timestamp,          // era Utc::now() — bug corretto
+        req.timestamp,          // was Utc::now() — fixed bug
         req.session_open, req.prev_close, req.prev_high,
         req.prev_low, req.intraday_high, req.intraday_low,
         req.top_k,
     );
     Json(MatchesResponse::from(result))
+}
+
+/// Cache-aside: reuse cached per-candle results when present, otherwise compute fresh.
+fn fetch_or_compute_history(state: &AppState, req: &AiAnalysisRequest) -> Vec<CachedResult> {
+    let cached = state.cache.get_session_history(
+        &req.symbol, &req.timeframe, req.timestamp, req.candles.len()
+    );
+    if !cached.is_empty() {
+        return cached;
+    }
+    compute_candle_history(
+        state, &req.symbol, &req.timeframe, &req.session_id,
+        req.timestamp, &req.candles, req.session_open as f32, req.top_k,
+    )
+}
+
+/// Cache-aside for the context match: reuse if present, otherwise compute fresh.
+fn fetch_or_compute_context(state: &AppState, req: &AiAnalysisRequest) -> CachedResult {
+    state.cache.get_context(&req.symbol, req.timestamp).unwrap_or_else(|| {
+        compute_context(
+            state, &req.symbol, &req.session_id, req.timestamp,
+            req.session_open as f32, req.prev_close, req.prev_high,
+            req.prev_low, req.intraday_high, req.intraday_low, req.top_k,
+        )
+    })
+}
+
+fn build_ai_payload(req: &AiAnalysisRequest, history: &[CachedResult], context: &CachedResult) -> serde_json::Value {
+    json!({
+        "symbol": req.symbol,
+        "session_id": req.session_id,
+        "current_price_action": req.current_price_action,
+        "evolution_history": history,
+        "context": context,
+        "session_open": req.session_open,
+    })
 }
 
 pub async fn ai_analysis_handler(
@@ -134,41 +170,15 @@ pub async fn ai_analysis_handler(
 ) -> impl IntoResponse {
     let key = CandleCacheKey::new(&req.symbol, &req.timeframe, req.timestamp);
 
-    // Cache-aside: usa la cache se disponibile, altrimenti calcola autonomamente
-    let full_history = {
-        let h = state.cache.get_session_history(
-            &req.symbol, &req.timeframe, req.timestamp, req.candles.len()
-        );
-        if h.is_empty() {
-            compute_candle_history(
-                &state, &req.symbol, &req.timeframe, &req.session_id,
-                req.timestamp, &req.candles, req.session_open as f32, req.top_k,
-            )
-        } else { h }
-    };
-    let context_res = match state.cache.get_context(&req.symbol, req.timestamp) {
-        Some(c) => c,
-        None => compute_context(
-            &state, &req.symbol, &req.session_id, req.timestamp,
-            req.session_open as f32, req.prev_close, req.prev_high,
-            req.prev_low, req.intraday_high, req.intraday_low, req.top_k,
-        ),
-    };
-
-    let ai_data = json!({
-        "symbol": req.symbol,
-        "session_id": req.session_id,
-        "current_price_action": req.current_price_action,
-        "evolution_history": full_history,
-        "context": context_res,
-        "session_open": req.session_open,
-    });
+    let history = fetch_or_compute_history(&state, &req);
+    let context = fetch_or_compute_context(&state, &req);
+    let ai_data = build_ai_payload(&req, &history, &context);
 
     match state.ai_service.get_analysis(key, ai_data).await {
         Ok(analysis) => Json(json!({ "status": "success", "analysis": analysis })),
         Err(e) => {
-            eprintln!("Errore analisi AI: {}", e);
-            Json(json!({ "status": "error", "message": format!("Errore analisi: {}", e) }))
+            eprintln!("AI analysis error: {}", e);
+            Json(json!({ "status": "error", "message": format!("Analysis error: {}", e) }))
         }
     }
 }

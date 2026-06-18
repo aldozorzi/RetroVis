@@ -81,6 +81,8 @@ pub struct QueryRequest {
     pub session_open: f32,
 }
 
+// Historical outcome for a single matched day/session: how price behaved
+// after a setup similar to the current one.
 pub struct MatchOutcome {
     pub timestamp: u32,
     pub distance: f32,
@@ -108,11 +110,12 @@ impl From<CachedResult> for MatchesResponse {
     }
 }
 
-
+// API-facing match result: same data as MatchOutcome, converted from
+// percentages to price points using the current session's price level.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct MatchResponse {
     pub timestamp: u32,
-    pub similarity: f32,
+    pub similarity: f32, // Similarity rescaled to 0-100 (higher = more similar).
     pub eos_pts: f32,
     pub up_pts: f32,
     pub down_pts: f32,
@@ -121,6 +124,7 @@ pub struct MatchResponse {
     pub next_candle_down: f32,
 }
 
+// Aggregated statistics across all historical matches for a session.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct AggregateData {
     pub avg_up: f32,
@@ -132,6 +136,8 @@ pub struct AggregateData {
     pub bias_pct: f32,
 }
 
+// Same statistics as AggregateData, but for the single candle immediately
+// following the matched session open — a short-term directional signal.
 #[derive(Debug, serde::Serialize, Clone, Copy, serde::Deserialize)]
 pub struct NextCandleData {
     pub avg_up: f32,
