@@ -509,7 +509,7 @@ public class RetroVis : Indicator
         {
             // SESSION DATA
             Brush edgeBrush = Brushes.White;
-            if (candlesSummary.EdgeRatio > 2.0)
+            if (candlesSummary.EdgeRatio > 2.0 && Math.Abs(candlesSummary.BiasPct) >60)
                 edgeBrush = (candlesSummary.AvgUp > Math.Abs(candlesSummary.AvgDown)) ? Brushes.LimeGreen : Brushes.Red;
             else if (candlesSummary.EdgeRatio > 1.2)
                 edgeBrush = Brushes.Gold;
@@ -525,10 +525,8 @@ public class RetroVis : Indicator
             ty += 24;
 
             // NEXT CANDLE DATA
-
-
             edgeBrush = Brushes.White;
-            if (nextCandle.EdgeRatio > 2.0)
+            if (nextCandle.EdgeRatio > 2.0 && Math.Abs(nextCandle.BiasPct) > 60)
                 edgeBrush = (nextCandle.AvgUp > Math.Abs(nextCandle.AvgDown)) ? Brushes.LimeGreen : Brushes.Red;
             else if (nextCandle.EdgeRatio > 1.2)
                 edgeBrush = Brushes.Gold;
