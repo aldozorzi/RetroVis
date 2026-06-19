@@ -1,5 +1,3 @@
-//! Statistiche di aggregazione sui match outcome (mediana, edge ratio, bias).
-
 pub fn median(values: &mut [f32]) -> f32 {
     if values.is_empty() { return 0.0; }
     values.sort_by(|a, b| a.partial_cmp(b).unwrap());

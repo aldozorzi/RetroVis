@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize, Serializer};
 use std::sync::Arc;
-use crate::stats::{median, edge_ratio, bias_pct};   // usati dentro from_aggregates
+use crate::stats::{edge_ratio, bias_pct};   // usati dentro from_aggregates
 
 pub struct MatchOutcome {
     pub timestamp: u32,
@@ -76,13 +76,29 @@ pub struct CachedResult {
 
 impl CachedResult {
     pub fn from_aggregates(summary: AggregateData, matches: Vec<MatchResponse>) -> Self {
-        let mut ups: Vec<f32>   = matches.iter().map(|m| m.next_candle_up).collect();
-        let mut downs: Vec<f32> = matches.iter().map(|m| m.next_candle_down).collect();
+        let ups: Vec<f32> = matches.iter().map(|m| m.next_candle_up).collect();
+        let downs: Vec<f32> = matches.iter().map(|m| m.next_candle_down).collect();
+        let similarities: Vec<f32> = matches.iter().map(|m| m.similarity).collect();
 
-        let avg_next_up   = median(&mut ups);
-        let avg_next_down = median(&mut downs);
+        let avg_next_up = weighted_median(&ups, &similarities);
+        let avg_next_down = weighted_median(&downs, &similarities);
+
+        let mad_next_up = weighted_mad(&ups, &similarities);
+        let mad_next_down = weighted_mad(&downs, &similarities);
+
         let next_edge_ratio = edge_ratio(avg_next_up, avg_next_down);
-        let next_bias_pct = bias_pct(matches.iter().map(|m| (m.next_candle_up, m.next_candle_down)));
+        let raw_bias_pct = bias_pct(matches.iter().map(|m| (m.next_candle_up, m.next_candle_down)));
+
+        let net_movement = (avg_next_up - avg_next_down).abs();
+        let avg_mad = (mad_next_up + mad_next_down) / 2.0;
+        
+        let confidence = if net_movement == 0.0 {
+            0.0
+        } else {
+            net_movement / (net_movement + avg_mad)
+        };
+
+        let adjusted_bias_pct = raw_bias_pct * confidence;
 
         Self {
             summary,
@@ -92,10 +108,39 @@ impl CachedResult {
                 avg_up: avg_next_up,
                 avg_down: avg_next_down,
                 edge_ratio: next_edge_ratio,
-                bias_pct: next_bias_pct,
+                bias_pct: adjusted_bias_pct,
             },
         }
     }
+}
+
+fn weighted_median(values: &[f32], weights: &[f32]) -> f32 {
+    if values.is_empty() { return 0.0; }
+    
+    let mut indexed: Vec<(f32, f32)> = values.iter().zip(weights.iter()).map(|(&v, &w)| (v, w)).collect();
+    indexed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    
+    let total_weight: f32 = indexed.iter().map(|(_, w)| w).sum();
+    let half_weight = total_weight / 2.0;
+    
+    let mut cumulative = 0.0;
+    for (val, weight) in indexed.iter() {
+        cumulative += weight;
+        if cumulative >= half_weight {
+            return *val;
+        }
+    }
+    
+    indexed.last().unwrap().0
+}
+
+fn weighted_mad(values: &[f32], weights: &[f32]) -> f32 {
+    if values.is_empty() { return 0.0; }
+    
+    let med = weighted_median(values, weights);
+    let abs_devs: Vec<f32> = values.iter().map(|&v| (v - med).abs()).collect();
+    
+    weighted_median(&abs_devs, weights)
 }
 
 fn serialize_f32_as_int<S>(value: &f32, serializer: S) -> Result<S::Ok, S::Error>
