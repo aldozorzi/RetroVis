@@ -25,7 +25,7 @@ mod ai_provider;
 mod http_client;
 
 use models::{QueryRequest,AppState,MatchesResponse,MatchResponse, MatchOutcome,ContextQueryRequest,Context,AggregateData,CachedResult,NormalizedCandle,AiAnalysisRequest,CandleCacheKey,AiAnalysisService, RawCandle, SessionConfig};
-use stats::{median, edge_ratio, bias_pct}; 
+use stats::{median,  weighted_projection};
 use crate::ai_provider::AiProvider;
 use gemini::GeminiBroker;
 use engine::SearchEngine;
@@ -246,14 +246,7 @@ fn compute_context(
 }
 
 fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (AggregateData, Vec<MatchResponse>) {
-    let mut mfe_values: Vec<f32> = Vec::new();
-    let mut mae_values: Vec<f32> = Vec::new();
-    let mut eos_values: Vec<f32> = Vec::new();
-    let mut eoh_values: Vec<f32> = Vec::new();
-    let mut up_down_pairs: Vec<(f32, f32)> = Vec::new();
-    let mut response_matches = Vec::with_capacity(matches.len());
-
-    for m in matches.iter() {
+    let response_matches: Vec<MatchResponse> = matches.iter().map(|m| {
         let up = (m.mfe_pct / 100.0) * current_price;
         let down = (m.mae_pct / 100.0) * current_price;
         let eos = (m.eod_ret_pct / 100.0) * current_price;
@@ -261,14 +254,7 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
         let next_up_pts = (m.next_candle_up_pct.unwrap_or(0.0) / 100.0) * current_price;
         let next_down_pts = (m.next_candle_down_pct.unwrap_or(0.0) / 100.0) * current_price;
 
-        up_down_pairs.push((up, down.abs()));
-
-        mfe_values.push(up.abs());
-        mae_values.push(down.abs());
-        eos_values.push(eos);
-        eoh_values.push(eoh_pts);
-
-        response_matches.push(MatchResponse {
+        MatchResponse {
             timestamp: m.timestamp,
             similarity: 1.0 / (1.0 + m.distance) * 100.0,
             up_pts: up,
@@ -277,22 +263,26 @@ fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Aggreg
             eoh_pts,
             next_candle_up: next_up_pts,
             next_candle_down: next_down_pts,
-        });
-    }
+        }
+    }).collect();
 
-    let avg_up   = median(&mut mfe_values);
-    let avg_down = median(&mut mae_values);
-    let avg_eos  = median(&mut eos_values);
-    let avg_eoh  = median(&mut eoh_values);
+    let up_mags: Vec<f32> = response_matches.iter().map(|m| m.up_pts.abs()).collect();
+    let down_mags: Vec<f32> = response_matches.iter().map(|m| m.down_pts.abs()).collect();
+    let similarities: Vec<f32> = response_matches.iter().map(|m| m.similarity).collect();
+    let mut eos_values: Vec<f32> = response_matches.iter().map(|m| m.eos_pts).collect();
+    let mut eoh_values: Vec<f32> = response_matches.iter().map(|m| m.eoh_pts).collect();
+
+    let proj = weighted_projection(&up_mags, &down_mags, &similarities);
 
     (
         AggregateData {
-            avg_up,
-            avg_down,
-            avg_eos,
-            avg_eoh,
-            edge_ratio: edge_ratio(avg_up, avg_down),
-            bias_pct: bias_pct(up_down_pairs),
+            avg_up: proj.avg_up,
+            avg_down: proj.avg_down,
+            avg_eos: median(&mut eos_values),
+            avg_eoh: median(&mut eoh_values),
+            edge_ratio: proj.edge_ratio,
+            bias_pct: proj.bias_pct,
+            confidence: (proj.confidence * 100.0).round() as u8,
         },
         response_matches
     )

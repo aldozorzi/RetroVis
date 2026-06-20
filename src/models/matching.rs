@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize, Serializer};
 use std::sync::Arc;
-use crate::stats::{edge_ratio, bias_pct, weighted_median, weighted_mad};  
+use crate::stats::weighted_projection;
 
 pub struct MatchOutcome {
     pub timestamp: u32,
@@ -56,16 +56,14 @@ pub struct AggregateData {
     pub confidence: u8,
 }
 
-/*
+/*********************************************************************************************
+
 TODO
 Prossimo messaggio per Claude:
 Ho integrato tutto.
 Ora credo di dover fare la stessa cosa per AggregateData. Ho aggiunto il campo pub confidence: u8, ma dobbiamo calcolare il valore. Aquesto punto probabilmente vale la pena di scorporare il calcolo e creare un metodo in stats a cui massare i match, e poi chiamare questo metodo sia per il calcolo di aggregatedata sia per il calcolo di nextcandledata
-*/
 
-
-
-
+**********************************************************************************************/
 
 
 // Same statistics as AggregateData, but for the single candle immediately
@@ -94,40 +92,18 @@ impl CachedResult {
         let downs: Vec<f32> = matches.iter().map(|m| m.next_candle_down).collect();
         let similarities: Vec<f32> = matches.iter().map(|m| m.similarity).collect();
 
-        let avg_next_up = weighted_median(&ups, &similarities);
-        let avg_next_down = weighted_median(&downs, &similarities);
-        let next_edge_ratio = edge_ratio(avg_next_up, avg_next_down);
-
-        // Reliability of the dominant median projection (avg_up if long wins, avg_down if short wins).
-        let (dominant_values, dominant_median) = if avg_next_up >= avg_next_down {
-            (&ups, avg_next_up)
-        } else {
-            (&downs, avg_next_down)
-        };
-        let dominant_mad = weighted_mad(dominant_values, &similarities, dominant_median);
-        let n = matches.len() as f32;
-
-        let projection_confidence = if n < 3.0 || dominant_median == 0.0 {
-            0.0
-        } else {
-            dominant_median.abs() / (dominant_median.abs() + dominant_mad / n.sqrt())
-        };
-        let confidence: u8 = if projection_confidence.is_nan() { 0 } else {
-            (projection_confidence * 100.0).round().clamp(0.0, 100.0) as u8
-        };
-
-        let next_bias_pct = bias_pct(matches.iter().map(|m| (m.next_candle_up, m.next_candle_down)));
+        let proj = weighted_projection(&ups, &downs, &similarities);
 
         Self {
             summary,
             matches: Arc::new(matches),
             ai_analysis: None,
             next_candle: NextCandleData {
-                avg_up: avg_next_up,
-                avg_down: avg_next_down,
-                edge_ratio: next_edge_ratio,
-                bias_pct: next_bias_pct,
-                confidence
+                avg_up: proj.avg_up,
+                avg_down: proj.avg_down,
+                edge_ratio: proj.edge_ratio,
+                bias_pct: proj.bias_pct,
+                confidence: (proj.confidence * 100.0).round() as u8,
             },
         }
     }
