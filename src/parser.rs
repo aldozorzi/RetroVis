@@ -1,7 +1,10 @@
 use std::error::Error;
 use std::fs::File;
-use crate::models::{RawCandle, CandleStore};
 use memmap2::Mmap;
+use crate::models::{RawCandle, CandleStore};
+
+
+use crate::engine::NATIVE_TIMEFRAME_MIN;
 
 pub fn load_and_process(path: &str, symbol: &str) -> Result<CandleStore, Box<dyn Error>> {
     let file = File::open(path)?;
@@ -30,14 +33,12 @@ pub fn load_and_process(path: &str, symbol: &str) -> Result<CandleStore, Box<dyn
             let high_bytes   = match fields.next() { Some(f) => f, None => continue };
             let low_bytes    = match fields.next() { Some(f) => f, None => continue };
             let close_bytes  = match fields.next() { Some(f) => f, None => continue };
-            //let volume_bytes = match fields.next() { Some(f) => f, None => continue };
 
             let date_num  = match parse_date_to_u32(date_bytes) { Some(d) => d, None => continue };
             let open      = match parse_f32(open_bytes)   { Some(v) => v, None => continue };
             let high      = match parse_f32(high_bytes)   { Some(v) => v, None => continue };
             let low       = match parse_f32(low_bytes)    { Some(v) => v, None => continue };
             let close     = match parse_f32(close_bytes)  { Some(v) => v, None => continue };
-            //let volume    = match parse_f32(volume_bytes) { Some(v) => v, None => continue };
             let timestamp = calculate_timestamp(date_bytes, time_bytes);
 
             if current_date_num != 0 && date_num != current_date_num {
@@ -45,7 +46,7 @@ pub fn load_and_process(path: &str, symbol: &str) -> Result<CandleStore, Box<dyn
                 day_start = candles.len();
             }
             current_date_num = date_num;
-            candles.push(RawCandle { timestamp, open, high, low, close, /*_volume: volume */ });
+            candles.push(RawCandle { timestamp, open, high, low, close });
         }
     }
     if day_start < candles.len() {
@@ -59,7 +60,8 @@ pub fn load_and_process(path: &str, symbol: &str) -> Result<CandleStore, Box<dyn
 
 pub fn resample_slice(source_candles: &[RawCandle<f32>], to_min: u32) -> Vec<RawCandle<f32>> {
     let interval_secs = (to_min * 60) as u32;
-    let mut resampled = Vec::with_capacity(source_candles.len() / 3 + 1);
+    let ratio = (to_min / NATIVE_TIMEFRAME_MIN).max(1);
+    let mut resampled = Vec::with_capacity(source_candles.len() / ratio as usize + 1);
     let mut bucket: Option<RawCandle<f32>> = None;
 
     for candle in source_candles {
@@ -69,7 +71,6 @@ pub fn resample_slice(source_candles: &[RawCandle<f32>], to_min: u32) -> Vec<Raw
                 if candle.high > b.high { b.high = candle.high; }
                 if candle.low < b.low { b.low = candle.low; }
                 b.close = candle.close;
-                //b._volume += candle._volume;
             }
             _ => {
                 if let Some(b) = bucket.take() { resampled.push(b); }
@@ -79,7 +80,6 @@ pub fn resample_slice(source_candles: &[RawCandle<f32>], to_min: u32) -> Vec<Raw
                     high: candle.high,
                     low: candle.low,
                     close: candle.close,
-                    /*_volume: candle._volume,*/
                 });
             }
         }

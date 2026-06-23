@@ -13,7 +13,6 @@ pub struct AppState {
     pub cache: Arc<crate::cache::RetroVisCache>,
     pub broker: Arc<dyn AiProvider>,
     pub ai_service: Arc<AiAnalysisService>,
-    // pub oanda: Arc<crate::oanda::OandaClient>,
 }
 
 pub struct AiAnalysisService {

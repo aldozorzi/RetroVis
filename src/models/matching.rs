@@ -56,16 +56,6 @@ pub struct AggregateData {
     pub confidence: u8,
 }
 
-/*********************************************************************************************
-
-TODO
-Prossimo messaggio per Claude:
-Ho integrato tutto.
-Ora credo di dover fare la stessa cosa per AggregateData. Ho aggiunto il campo pub confidence: u8, ma dobbiamo calcolare il valore. Aquesto punto probabilmente vale la pena di scorporare il calcolo e creare un metodo in stats a cui massare i match, e poi chiamare questo metodo sia per il calcolo di aggregatedata sia per il calcolo di nextcandledata
-
-**********************************************************************************************/
-
-
 // Same statistics as AggregateData, but for the single candle immediately
 // following the matched session open — a short-term directional signal.
 #[derive(Debug, serde::Serialize, Clone, Copy, serde::Deserialize)]
@@ -115,6 +105,5 @@ fn serialize_f32_as_int<S>(value: &f32, serializer: S) -> Result<S::Ok, S::Error
 where
     S: Serializer,
 {
-    // Usa .round() se vuoi arrotondare, oppure rimuovilo se vuoi solo troncare
     serializer.serialize_i32(value.round() as i32)
 }

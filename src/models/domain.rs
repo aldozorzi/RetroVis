@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use chrono::NaiveTime;
 use std::ops::Range;
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 pub struct RawCandle<T> {
     pub timestamp: u32,
     pub open: T,
@@ -79,7 +79,7 @@ impl Context {
     ) -> Self {
         let prev_range = (prev_high - prev_low).max(1e-6);
         Self {
-            gap_pct: ((session_open - prev_close) / prev_close) * 100.0,
+            gap_pct: ((session_open - prev_close) / prev_close.max(1e-6)) * 100.0,
             pos_in_prev_range: (session_open - prev_low) / prev_range,
             dist_from_prev_high: ((prev_high - session_open) / prev_high) * 100.0,
             dist_from_intraday_high: ((intraday_high - session_open) / intraday_high.max(1e-6)) * 100.0,

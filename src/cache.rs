@@ -26,6 +26,7 @@ impl RetroVisCache {
     where 
         F: FnOnce() -> CachedResult 
     {
+        self.evict_if_new_day();
         let key = ContextCacheKey::new(asset, timestamp);
 
         self.context_results.entry(key)
@@ -41,10 +42,10 @@ impl RetroVisCache {
         self.evict_if_new_day();
         let key = ContextCacheKey::new(asset, timestamp);
 
-        // Usiamo .get() per una lettura concorrente condivisa
+        // Use .get() for a concurrent read
         self.context_results
             .get(&key)
-            .map(|r| r.value().clone()) // Accediamo al valore nel Ref e lo cloniamo
+            .map(|r| r.value().clone()) // Access the value in the Ref and clone it
     }
 
     pub fn get_or_calculate_candle<F>(

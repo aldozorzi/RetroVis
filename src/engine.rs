@@ -5,7 +5,7 @@ use std::str::FromStr;
 use std::borrow::Cow;
 
 // CSV market data files are stored at 5-minute native resolution.
-const NATIVE_TIMEFRAME_MIN: u32 = 5;
+pub const NATIVE_TIMEFRAME_MIN: u32 = 5;
 
 // Window used to sample "end of hour" price action shortly after a session opens.
 const END_OF_HOUR_WINDOW_SECS: u32 = 3_600;
@@ -97,10 +97,6 @@ impl SearchEngine {
                 .collect();
             let dist = Self::calculate_distance(current_pattern, &historical_pattern);
 
-            let eoh_pct = Self::eoh_pct(&candles, start_idx, target_start_timestamp, baseline);
-            let actual_end = Self::find_session_end_idx(&candles, session, day_start_timestamp, start_idx);
-            let (max_high, min_low, last_close) = Self::session_extremes(&candles, start_idx, actual_end, baseline);
-
             // Price action of the candle immediately after the matched pattern (point X + 1).
             let next_idx = start_idx + len;
             let (next_up_pct, next_down_pct) = if next_idx < candles.len() && baseline > 0.0 {
@@ -114,19 +110,13 @@ impl SearchEngine {
             };
             // -----------------------------------------------------------------------
 
-            outcomes.push(crate::models::MatchOutcome {
-                timestamp: candles[start_idx].timestamp,
-                distance: dist,
-                eod_ret_pct: Self::pct_diff(last_close, baseline, baseline),
-                mfe_pct: Self::pct_diff(max_high, baseline, baseline),
-                mae_pct: Self::pct_diff(min_low, baseline, baseline),
-                eoh_pct,
-                next_candle_up_pct: Some(next_up_pct),
-                next_candle_down_pct: Some(next_down_pct),
-            });
+            outcomes.push(Self::build_outcome(
+                &candles, session, start_idx, day_start_timestamp, target_start_timestamp,
+                baseline, dist, Some(next_up_pct), Some(next_down_pct),
+            ));
         }
 
-        outcomes.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+        outcomes.sort_by(|a, b| a.distance.total_cmp(&b.distance));
         outcomes.into_iter().take(top_k).collect()
     }
 
@@ -197,24 +187,13 @@ impl SearchEngine {
             let dist     = current_context.distance(&hist_context);
             let baseline = session_open;
 
-            let eoh_pct = Self::eoh_pct(&candles, start_idx, target_start_timestamp, baseline);
-            let actual_end = Self::find_session_end_idx(&candles, session, day_start_timestamp, start_idx);
-            let (max_high, min_low, last_close) = Self::session_extremes(&candles, start_idx, actual_end, baseline);
-
-            outcomes.push(crate::models::MatchOutcome {
-                timestamp: candles[start_idx].timestamp,
-                distance: dist,
-                eod_ret_pct: Self::pct_diff(last_close, baseline, baseline),
-                mfe_pct: Self::pct_diff(max_high, baseline, baseline),
-                mae_pct: Self::pct_diff(min_low, baseline, baseline),
-                eoh_pct,
-                // Context matching has no fixed pattern length, so there's no well-defined "next candle" index here.
-                next_candle_up_pct: None,
-                next_candle_down_pct: None,
-            });
+            outcomes.push(Self::build_outcome(
+                &candles, session, start_idx, day_start_timestamp, target_start_timestamp,
+                baseline, dist, None, None,
+            ));
         }
 
-        outcomes.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+        outcomes.sort_by(|a, b| a.distance.total_cmp(&b.distance));
         outcomes.into_iter().take(top_k).collect()
     }
 
@@ -227,6 +206,33 @@ impl SearchEngine {
             Err(_) => return None,
         };
         Some(SessionStart { start_idx, day_start_timestamp, target_start_timestamp })
+    }
+
+    fn build_outcome(
+        candles: &[RawCandle<f32>],
+        session: &crate::models::SessionConfig,
+        start_idx: usize,
+        day_start_timestamp: u32,
+        target_start_timestamp: u32,
+        baseline: f32,
+        distance: f32,
+        next_candle_up_pct: Option<f32>,
+        next_candle_down_pct: Option<f32>,
+    ) -> crate::models::MatchOutcome {
+        let eoh_pct = Self::eoh_pct(candles, start_idx, target_start_timestamp, baseline);
+        let actual_end = Self::find_session_end_idx(candles, session, day_start_timestamp, start_idx);
+        let (max_high, min_low, last_close) = Self::session_extremes(candles, start_idx, actual_end, baseline);
+ 
+        crate::models::MatchOutcome {
+            timestamp: candles[start_idx].timestamp,
+            distance,
+            eod_ret_pct: Self::pct_diff(last_close, baseline, baseline),
+            mfe_pct: Self::pct_diff(max_high, baseline, baseline),
+            mae_pct: Self::pct_diff(min_low, baseline, baseline),
+            eoh_pct,
+            next_candle_up_pct,
+            next_candle_down_pct,
+        }
     }
 
     fn find_session_end_idx(
