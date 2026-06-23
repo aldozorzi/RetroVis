@@ -215,7 +215,7 @@ public class RetroVis : Indicator
             if (response.IsSuccessStatusCode)
             {
                 string resJson = await response.Content.ReadAsStringAsync();
-                Log("resJson: " + resJson);
+                //Log("resJson: " + resJson);
                 var fullData = JsonSerializer.Deserialize<MatchesResponse>(resJson);
                 
                 if (fullData == null) return;
@@ -367,7 +367,7 @@ public class RetroVis : Indicator
             if (response.IsSuccessStatusCode)
             {
                 string resJson = await response.Content.ReadAsStringAsync();
-                Log("Context resJson: " + resJson);
+                //Log("Context resJson: " + resJson);
                 var fullData = JsonSerializer.Deserialize<MatchesResponse>(resJson);
                 if (fullData == null) return;
                 contextResults = fullData.Matches;
@@ -423,10 +423,20 @@ public class RetroVis : Indicator
         }
         if (DrawNextCandleLevels)
         {
-            //Log("Clicked Candle Index: " + (analysisIndex +1)+ " - Time:" + Time(analysisIndex+1) +"Close: " + Close(analysisIndex+1));
+            int baseCandleIndex = analysisIndex + 1;
+
+            // If a limit is set, cap the index to a maximum distance from the open bar
+            //Log("baseCandleIndex: " + baseCandleIndex + " - openBarIndex: " + openBarIndex + " - MaxCandles: " + MaxCandles);
+            if (MaxCandles > 0 && (openBarIndex - baseCandleIndex) >= MaxCandles)
+            {
+                baseCandleIndex = openBarIndex - MaxCandles + 1;
+            }
+
+            int lastCandleIndex = baseCandleIndex;
+            //Log("Last Candle Index: " + lastCandleIndex + " - Time:" + Time(lastCandleIndex) +"Close: " + Close(lastCandleIndex));
             var mainWindow = this.CurrentChart.MainWindow;
-            double up = Close(analysisIndex+1) + nextCandle.AvgUp;
-            double down = Close(analysisIndex+1) - nextCandle.AvgDown;
+            double up = Close(lastCandleIndex) + nextCandle.AvgUp;
+            double down = Close(lastCandleIndex) - nextCandle.AvgDown;
             int upYCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartY(up));
             int downYCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartY(down));
             int drawBarIndex = Math.Max(0, openBarIndex);
