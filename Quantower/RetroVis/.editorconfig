@@ -1,0 +1,4 @@
+﻿[*.cs]
+
+# IDE0022: Usare il corpo dell'espressione per il metodo
+dotnet_diagnostic.IDE0022.severity = silent

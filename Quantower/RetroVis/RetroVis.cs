@@ -16,12 +16,15 @@ using TradingPlatform.BusinessLayer;
 using TradingPlatform.BusinessLayer.Chart;
 using static System.Runtime.InteropServices.JavaScript.JSType;
 
+namespace Ldazrz.RetroVis;
+
 [SupportedOSPlatform("windows")]
+
 
 public class RetroVis : Indicator
 {
     #region Parameters
-    [InputParameter("Session Type", 0, variants: new object[] { "AUTO", "AUTO", "NY_OPEN", "NY_OPEN", "LONDON_OPEN", "LONDON_OPEN" })]
+    [InputParameter("Session Type", 0, variants: ["AUTO", "AUTO", "NY_OPEN", "NY_OPEN", "LONDON_OPEN", "LONDON_OPEN" ])]
     public string SessionId = "AUTO";
 
     [InputParameter("Min Candles for Pattern", 1, 1, 15, 1)]
@@ -45,12 +48,12 @@ public class RetroVis : Indicator
     #endregion
 
     #region Internal Fields
-    private readonly HttpClient httpClient = new HttpClient();
-    private AggregateData candlesSummary = new AggregateData();
-    private NextCandleData nextCandle = new NextCandleData();
-    private List<MatchResponse> candlesResults = new List<MatchResponse>();
+    private readonly HttpClient httpClient = new();
+    private AggregateData candlesSummary = new();
+    private NextCandleData nextCandle = new();
+    private List<MatchResponse> candlesResults = [];
     private bool isPanelVisible = true;
-    private Rectangle toggleRect = new Rectangle(5, 80, 120, 25);
+    private Rectangle toggleRect = new (5, 80, 120, 25);
     private int openBarIndex = -1;
     private double currentPriceBase = 0;
     private DateTime lastProcessedBarTime;
@@ -64,33 +67,32 @@ public class RetroVis : Indicator
 
     double currentDelta = 0;
 
-    private List<RectangleF> matchClickAreas = new List<RectangleF>();
-    private List<string> matchDates = new List<string>();
+    private readonly List<RectangleF> matchClickAreas = [];
+    private readonly List<string> matchDates = [];
 
     public string SearchUrl { get; set; }
     public string ContextUrl { get; set; }
-    private AggregateData contextSummary = new AggregateData();
-    private List<MatchResponse> contextResults = new List<MatchResponse>();
+    private AggregateData contextSummary = new ();
+    private List<MatchResponse> contextResults = [];
     private string lastContextSessionDate = ""; // traccia se il contesto è già stato caricato per questa apertura
 
-    private List<RectangleF> contextClickAreas = new List<RectangleF>();
-    private List<string> contextDates = new List<string>();
-
+    private readonly List<RectangleF> contextClickAreas = [];
+    private readonly List<string> contextDates = [];
     private int lastPanelHeight = 0;
 
     private bool isBacktestMode = false;
-    private Rectangle backtestBtnRect = new Rectangle(130, 80, 130, 25); // Accanto al primo bottone
+    private Rectangle backtestBtnRect = new (130, 80, 130, 25); // Accanto al primo bottone
 
     private string currentAnalysisText;
     
-    private Font dataFont = new Font("Consolas", 9);
-    private Font btnfont = new Font("Arial", 7, FontStyle.Bold);
-    private Font headerFont = new Font("Consolas", 11, FontStyle.Bold);
-    private Font bodyFont = new Font("Consolas", 10);
-    private SolidBrush panelBgBrush = new SolidBrush(Color.FromArgb(220, 10, 10, 10));
-    private SolidBrush matchBgBrush = new SolidBrush(Color.FromArgb(0, 180, 100, 30));
-    private Pen upPen = new Pen(Color.LimeGreen, 2);
-    private Pen downPen = new Pen(Color.Sienna, 2);
+    private readonly Font dataFont = new ("Consolas", 9);
+    private readonly Font btnfont = new ("Arial", 7, FontStyle.Bold);
+    private readonly Font headerFont = new ("Consolas", 11, FontStyle.Bold);
+    private readonly Font bodyFont = new ("Consolas", 10);
+    private readonly SolidBrush panelBgBrush = new (Color.FromArgb(220, 10, 10, 10));
+    private readonly SolidBrush matchBgBrush = new (Color.FromArgb(0, 180, 100, 30));
+    private readonly Pen upPen = new (Color.LimeGreen, 2);
+    private readonly Pen downPen = new (Color.Sienna, 2);
 
 
     private float aiBoxHeight = 100f;
@@ -102,15 +104,15 @@ public class RetroVis : Indicator
 
     public RetroVis() : base()
     {
-        Name = "RetroVis";
-        SeparateWindow = false;
+        this.Name = "RetroVis";
+        this.SeparateWindow = false;
     }
     protected override void OnInit()
     {
-        httpClient.Timeout = TimeSpan.FromSeconds(60);
+        this.httpClient.Timeout = TimeSpan.FromSeconds(60);
 
-        this.SearchUrl = $"{ServerUrl.TrimEnd('/')}/search";
-        this.ContextUrl = $"{ServerUrl.TrimEnd('/')}/context-search";
+        this.SearchUrl = $"{this.ServerUrl.TrimEnd('/')}/search";
+        this.ContextUrl = $"{this.ServerUrl.TrimEnd('/')}/context-search";
         try
         {
             NyTz = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
@@ -121,61 +123,61 @@ public class RetroVis : Indicator
             Log("CRITICAL: Timezone non trovata! " + ex.Message);
         }
 
-        lastProcessedBarTime = DateTime.MinValue;
+        this.lastProcessedBarTime = DateTime.MinValue;
         if (this.CurrentChart != null)
         {
-            this.CurrentChart.MouseUp -= OnChartMouseUp;
-            this.CurrentChart.MouseUp += OnChartMouseUp;
+            this.CurrentChart.MouseUp -= this.OnChartMouseUp;
+            this.CurrentChart.MouseUp += this.OnChartMouseUp;
 
-            this.CurrentChart.MouseDown -= OnChartMouseDown;
-            this.CurrentChart.MouseDown += OnChartMouseDown;
+            this.CurrentChart.MouseDown -= this.OnChartMouseDown;
+            this.CurrentChart.MouseDown += this.OnChartMouseDown;
         }
             
 
         
 
-        initTicker();
+        this.InitTicker();
         
     }
 
     protected void ResetLists()
     {
-        matchClickAreas.Clear();
-        matchDates.Clear();
-        contextClickAreas.Clear();
-        contextDates.Clear();
+        this.matchClickAreas.Clear();
+        this.matchDates.Clear();
+        this.contextClickAreas.Clear();
+        this.contextDates.Clear();
     }
 
     protected void Reset()
     {
-        this.lastProcessedBarTime = default(DateTime);
-        candlesResults.Clear();
-        contextResults.Clear();
-        ResetLists();
+        this.lastProcessedBarTime = default;
+        this.candlesResults.Clear();
+        this.contextResults.Clear();
+        this.ResetLists();
         this.currentCandleCount = 0;
-        lastContextSessionDate = "";
-        currentAnalysisText = "Loading new Analysis...";
+        this.lastContextSessionDate = "";
+        this.currentAnalysisText = "Loading new Analysis...";
     }
 
     protected override void OnSettingsUpdated()
     {
         base.OnSettingsUpdated();
-        Reset();
+        this.Reset();
     }
 
     protected override void OnUpdate(UpdateArgs args)
     {
-        if (isBacktestMode || !isPanelVisible) return;
-        currentDelta = Close(0) - currentPriceBase;
+        if (this.isBacktestMode || !this.isPanelVisible) return;
+        this.currentDelta = this.Close(0) - this.currentPriceBase;
 
-        DateTime currentBarTime = Time();
-        if (currentBarTime == lastProcessedBarTime)
+        DateTime currentBarTime = this.Time();
+        if (currentBarTime == this.lastProcessedBarTime)
         {
-            currentDelta = Close(0) - currentPriceBase;
+            this.currentDelta = this.Close(0) - this.currentPriceBase;
             return;
         }
 
-        Reset();
+        this.Reset();
 
 
         HistoryAggregationTime aggregation = (HistoryAggregationTime)this.HistoricalData.Aggregation;
@@ -184,8 +186,8 @@ public class RetroVis : Indicator
             return;
 
 
-        lastProcessedBarTime = currentBarTime;
-        ProcessAnalysis(0);
+        this.lastProcessedBarTime = currentBarTime;
+        this.ProcessAnalysis(0);
 
     }
 
@@ -197,20 +199,20 @@ public class RetroVis : Indicator
             uint finalTimestamp = (uint)lastCandle.Timestamp;
             var request = new QueryRequest
             {
-                Symbol = ticker,
-                SessionId = effectiveSession,
+                Symbol = this.ticker,
+                SessionId = this.effectiveSession,
                 Candles = candles,
                 TopK = 5,
                 Timestamp = finalTimestamp,
-                Timeframe = GetFormattedTimeframe(),
-                SessionOpen = (float)currentPriceBase
+                Timeframe = this.GetFormattedTimeframe(),
+                SessionOpen = (float)this.currentPriceBase
             };
             
             string json = JsonSerializer.Serialize(request);
             // Log("request timestamp:" + finalTimestamp);
             //Log("request json:" + json);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
-            var response = await httpClient.PostAsync(SearchUrl, content);
+            var response = await this.httpClient.PostAsync(this.SearchUrl, content);
             //Log(response.ToString());
             if (response.IsSuccessStatusCode)
             {
@@ -220,11 +222,11 @@ public class RetroVis : Indicator
                 
                 if (fullData == null) return;
                 // Log("Success");
-                candlesResults = fullData.Matches;
-                candlesSummary = fullData.Summary;
-                
-                nextCandle = fullData.NextCandle;
-                _ =FetchAiAnalysis(candles);
+                this.candlesResults = fullData.Matches;
+                this.candlesSummary = fullData.Summary;
+
+                this.nextCandle = fullData.NextCandle;
+                _ = this.FetchAiAnalysis(candles);
             }
         }
         catch (Exception ex) { Log("Error:"+ ex.Message); }
@@ -232,19 +234,19 @@ public class RetroVis : Indicator
 
     private async Task FetchAiAnalysis(List<RawCandle> candles)
     {
-        if(!EnableAiAnalysis) return;
+        if(!this.EnableAiAnalysis) return;
         try
         {
             var lastCandle = candles[candles.Count - 1];
             uint finalTimestamp = (uint)lastCandle.Timestamp;
-            ContextQueryRequest contextData = BuildContextQueryRequest();
+            ContextQueryRequest contextData = this.BuildContextQueryRequest();
             var request = new AiAnalysisRequest
             {
 
-                Symbol = ticker,
-                SessionId = effectiveSession,
+                Symbol = this.ticker,
+                SessionId = this.effectiveSession,
                 Candles = candles,
-                Timeframe = GetFormattedTimeframe(),
+                Timeframe = this.GetFormattedTimeframe(),
                 Timestamp = finalTimestamp,
                 CurrentPriceAction = lastCandle.Close,
                 SessionOpen = contextData.SessionOpen,
@@ -259,14 +261,14 @@ public class RetroVis : Indicator
             string json = JsonSerializer.Serialize(request);
             //Log("AI json:" + json);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
-            var response = await httpClient.PostAsync($"{ServerUrl.TrimEnd('/')}/get-ai-analysis", content);
+            var response = await this.httpClient.PostAsync($"{this.ServerUrl.TrimEnd('/')}/get-ai-analysis", content);
             if (response.IsSuccessStatusCode)
             {
                 var result = await response.Content.ReadFromJsonAsync<AiResponse>();
 
-                if (result != null && result.status == "success")
+                if (result != null && result.Status == "success")
                 {
-                    this.currentAnalysisText = result.analysis;
+                    this.currentAnalysisText = result.Analysis;
                 }
             }
         }
@@ -276,71 +278,67 @@ public class RetroVis : Indicator
     private ContextQueryRequest BuildContextQueryRequest()
     {
         int closeHour, closeMinute;
-        TimeZoneInfo sessionTz;
 
-        if (effectiveSession == "NY_OPEN")
+        if (this.effectiveSession == "NY_OPEN")
         {
             closeHour = 17;
             closeMinute = 0;
-            sessionTz = NyTz;
         }
-        else if (effectiveSession == "LONDON_OPEN")
+        else if (this.effectiveSession == "LONDON_OPEN")
         {
             closeHour = 17;
             closeMinute = 0;
-            sessionTz = LondonTz;
         }
         else
         {
             closeHour = 17;
             closeMinute = 0;
-            sessionTz = NyTz;
         }
 
-        float sessionOpen = (float)Open(openBarIndex);
+        float sessionOpen = (float)this.Open(this.openBarIndex);
 
         float intradayHigh = sessionOpen;
         float intradayLow = sessionOpen;
-        DateTime openBarDate = TimeZoneInfo.ConvertTimeFromUtc(Time(openBarIndex).ToUniversalTime(), NyTz).Date;
+        DateTime openBarDate = TimeZoneInfo.ConvertTimeFromUtc(this.Time(this.openBarIndex).ToUniversalTime(), NyTz).Date;
 
-        for (int i = openBarIndex + 1; i < Math.Min(Count, openBarIndex + 72); i++)
+        for (int i = this.openBarIndex + 1; i < Math.Min(this.Count, this.openBarIndex + 72); i++)
         {
-            DateTime barNy = TimeZoneInfo.ConvertTimeFromUtc(Time(i).ToUniversalTime(), NyTz);
+            DateTime barNy = TimeZoneInfo.ConvertTimeFromUtc(this.Time(i).ToUniversalTime(), NyTz);
             if (barNy.Date != openBarDate) break;
-            if ((float)High(i) > intradayHigh) intradayHigh = (float)High(i);
-            if ((float)Low(i) < intradayLow) intradayLow = (float)Low(i);
+            if ((float)this.High(i) > intradayHigh) intradayHigh = (float)this.High(i);
+            if ((float)this.Low(i) < intradayLow) intradayLow = (float)this.Low(i);
         }
 
         float prevClose = 0, prevHigh = float.MinValue, prevLow = float.MaxValue;
         bool foundPrevDay = false;
 
-        DateTime currentSessionOpen = new DateTime(openBarDate.Year, openBarDate.Month, openBarDate.Day, closeHour, closeMinute, 0);
+        DateTime currentSessionOpen = new (openBarDate.Year, openBarDate.Month, openBarDate.Day, closeHour, closeMinute, 0);
 
-        DateTime prevSessionEnd = new DateTime(PrevTradingDay(currentSessionOpen).Year, PrevTradingDay(currentSessionOpen).Month, PrevTradingDay(currentSessionOpen).Day, closeHour, closeMinute, 0);
-        DateTime prevSessionStart = new DateTime(PrevTradingDay(prevSessionEnd).Year, PrevTradingDay(prevSessionEnd).Month, PrevTradingDay(prevSessionEnd).Day, closeHour, closeMinute, 0);
+        DateTime prevSessionEnd = new (PrevTradingDay(currentSessionOpen).Year, PrevTradingDay(currentSessionOpen).Month, PrevTradingDay(currentSessionOpen).Day, closeHour, closeMinute, 0);
+        DateTime prevSessionStart = new (PrevTradingDay(prevSessionEnd).Year, PrevTradingDay(prevSessionEnd).Month, PrevTradingDay(prevSessionEnd).Day, closeHour, closeMinute, 0);
 
-        for (int i = openBarIndex + 1; i < Math.Min(Count, openBarIndex + 1000); i++)
+        for (int i = this.openBarIndex + 1; i < Math.Min(this.Count, this.openBarIndex + 1000); i++)
         {
-            DateTime barNy = TimeZoneInfo.ConvertTimeFromUtc(Time(i).ToUniversalTime(), NyTz);
+            DateTime barNy = TimeZoneInfo.ConvertTimeFromUtc(this.Time(i).ToUniversalTime(), NyTz);
 
             if (barNy >= prevSessionEnd) continue;   
             if (barNy < prevSessionStart) break;  
 
             if (!foundPrevDay)
             {
-                prevClose = (float)Close(i);
+                prevClose = (float)this.Close(i);
                 foundPrevDay = true;
             }
-            if ((float)High(i) > prevHigh) prevHigh = (float)High(i);
-            if ((float)Low(i) < prevLow) prevLow = (float)Low(i);
+            if ((float)this.High(i) > prevHigh) prevHigh = (float)this.High(i);
+            if ((float)this.Low(i) < prevLow) prevLow = (float)this.Low(i);
         }
 
-        uint openTimestamp = (uint)new DateTimeOffset(Time(openBarIndex)).ToUnixTimeSeconds();
+        uint openTimestamp = (uint)new DateTimeOffset(this.Time(this.openBarIndex)).ToUnixTimeSeconds();
 
         var request = new ContextQueryRequest
         {
-            Symbol = ticker,
-            SessionId = effectiveSession,
+            Symbol = this.ticker,
+            SessionId = this.effectiveSession,
             SessionOpen = sessionOpen,
             PrevClose = prevClose,
             PrevHigh = prevHigh,
@@ -353,15 +351,15 @@ public class RetroVis : Indicator
         return request;
     }
 
-    private async Task FetchContextMatchesAsync(int openBarIndex)
+    private async Task FetchContextMatchesAsync()
     {
         try
         {
-            ContextQueryRequest request = BuildContextQueryRequest();
+            ContextQueryRequest request = this.BuildContextQueryRequest();
 
             string json = JsonSerializer.Serialize(request);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
-            var response = await httpClient.PostAsync(ContextUrl, content);
+            var response = await this.httpClient.PostAsync(this.ContextUrl, content);
             //Log(response.ToString());
 
             if (response.IsSuccessStatusCode)
@@ -370,8 +368,8 @@ public class RetroVis : Indicator
                 //Log("Context resJson: " + resJson);
                 var fullData = JsonSerializer.Deserialize<MatchesResponse>(resJson);
                 if (fullData == null) return;
-                contextResults = fullData.Matches;
-                contextSummary = fullData.Summary;
+                this.contextResults = fullData.Matches;
+                this.contextSummary = fullData.Summary;
             }
         }
         catch (Exception ex) { Log("ContextError: " + ex.Message); }
@@ -380,138 +378,138 @@ public class RetroVis : Indicator
     public override void OnPaintChart(PaintChartEventArgs args)
     {
         Graphics gr = args.Graphics;
-        gr.FillRectangle(isPanelVisible ? Brushes.IndianRed : Brushes.SteelBlue, toggleRect);
-        string label = isPanelVisible ? "HIDE PANEL" : "SHOW PANEL";
+        gr.FillRectangle(this.isPanelVisible ? Brushes.IndianRed : Brushes.SteelBlue, this.toggleRect);
+        string label = this.isPanelVisible ? "HIDE PANEL" : "SHOW PANEL";
         
-        float titleWidth = gr.MeasureString(label, btnfont).Width;
-        gr.DrawString(label, btnfont, Brushes.White, toggleRect.X + (float)Math.Round((toggleRect.Width - titleWidth) / 2), toggleRect.Y + 7);
+        float titleWidth = gr.MeasureString(label, this.btnfont).Width;
+        gr.DrawString(label, this.btnfont, Brushes.White, this.toggleRect.X + (float)Math.Round((this.toggleRect.Width - titleWidth) / 2), this.toggleRect.Y + 7);
 
-        gr.FillRectangle(isBacktestMode ? Brushes.Orange : Brushes.DimGray, backtestBtnRect);
-        string btLabel = isBacktestMode ? "GO TO REAL TIME MODE" : " GO TO ANALYSIS MODE";
-        float labelWidth = gr.MeasureString(btLabel, btnfont).Width;
-        gr.DrawString(btLabel, btnfont, Brushes.White, backtestBtnRect.X + (float)Math.Round((backtestBtnRect.Width - labelWidth) / 2), backtestBtnRect.Y + 7);
+        gr.FillRectangle(this.isBacktestMode ? Brushes.Orange : Brushes.DimGray, this.backtestBtnRect);
+        string btLabel = this.isBacktestMode ? "GO TO REAL TIME MODE" : " GO TO ANALYSIS MODE";
+        float labelWidth = gr.MeasureString(btLabel, this.btnfont).Width;
+        gr.DrawString(btLabel, this.btnfont, Brushes.White, this.backtestBtnRect.X + (float)Math.Round((this.backtestBtnRect.Width - labelWidth) / 2), this.backtestBtnRect.Y + 7);
 
-        if (isPanelVisible)
+        if (this.isPanelVisible)
         {
-            DrawLevels(gr);
-            DrawResultsPanel(gr);
+            this.DrawLevels(gr);
+            this.DrawResultsPanel(gr);
             
-            if (EnableAiAnalysis)
-                DrawAiPanel(gr);
+            if (this.EnableAiAnalysis)
+                this.DrawAiPanel(gr);
             
         }
     }
 
     private void DrawLevels(Graphics gr)
     {
-        if(!DrawSessionLevels && !DrawNextCandleLevels) return;
+        if(!this.DrawSessionLevels && !this.DrawNextCandleLevels) return;
 
         if(this.currentCandleCount < this.MinCandles) return;
-        if (DrawSessionLevels)
+        if (this.DrawSessionLevels)
         {
             var mainWindow = this.CurrentChart.MainWindow;
-            double up = currentPriceBase + candlesSummary.AvgUp;
-            double down = currentPriceBase - candlesSummary.AvgDown;
+            double up = this.currentPriceBase + this.candlesSummary.AvgUp;
+            double down = this.currentPriceBase - this.candlesSummary.AvgDown;
             int upYCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartY(up));
             int downYCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartY(down));
-            int drawBarIndex = Math.Max(0, openBarIndex);
-            int startXCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartX(Time(drawBarIndex)));
+            int drawBarIndex = Math.Max(0, this.openBarIndex);
+            int startXCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartX(this.Time(drawBarIndex)));
             int rightX = mainWindow.ClientRectangle.Right;
 
-            gr.DrawLine(upPen, startXCoord, upYCoord, rightX, upYCoord);
-            gr.DrawLine(downPen, startXCoord, downYCoord, rightX, downYCoord);
+            gr.DrawLine(this.upPen, startXCoord, upYCoord, rightX, upYCoord);
+            gr.DrawLine(this.downPen, startXCoord, downYCoord, rightX, downYCoord);
         }
-        if (DrawNextCandleLevels)
+        if (this.DrawNextCandleLevels)
         {
-            int baseCandleIndex = analysisIndex + 1;
+            int baseCandleIndex = this.analysisIndex + 1;
 
             // If a limit is set, cap the index to a maximum distance from the open bar
             //Log("baseCandleIndex: " + baseCandleIndex + " - openBarIndex: " + openBarIndex + " - MaxCandles: " + MaxCandles);
-            if (MaxCandles > 0 && (openBarIndex - baseCandleIndex) >= MaxCandles)
+            if (this.MaxCandles > 0 && (this.openBarIndex - baseCandleIndex) >= this.MaxCandles)
             {
-                baseCandleIndex = openBarIndex - MaxCandles + 1;
+                baseCandleIndex = this.openBarIndex - this.MaxCandles + 1;
             }
 
             int lastCandleIndex = baseCandleIndex;
             //Log("Last Candle Index: " + lastCandleIndex + " - Time:" + Time(lastCandleIndex) +"Close: " + Close(lastCandleIndex));
             var mainWindow = this.CurrentChart.MainWindow;
-            double up = Close(lastCandleIndex) + nextCandle.AvgUp;
-            double down = Close(lastCandleIndex) - nextCandle.AvgDown;
+            double up = this.Close(lastCandleIndex) + this.nextCandle.AvgUp;
+            double down = this.Close(lastCandleIndex) - this.nextCandle.AvgDown;
             int upYCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartY(up));
             int downYCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartY(down));
-            int drawBarIndex = Math.Max(0, openBarIndex);
-            int startXCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartX(Time(drawBarIndex)));
+            int drawBarIndex = Math.Max(0, this.openBarIndex);
+            int startXCoord = (int)Math.Round(mainWindow.CoordinatesConverter.GetChartX(this.Time(drawBarIndex)));
             int rightX = mainWindow.ClientRectangle.Right;
-            using (Pen dashedUpPen = new Pen(Color.Turquoise, 2f))
+            using (Pen dashedUpPen = new (Color.Turquoise, 2f))
             {
                 dashedUpPen.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash;
                 gr.DrawLine(dashedUpPen, startXCoord, upYCoord, rightX, upYCoord);
             }
-            using (Pen dashedDownPen = new Pen(Color.LightGoldenrodYellow, 2f))
-            {
-                dashedDownPen.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash;
-                gr.DrawLine(dashedDownPen, startXCoord, downYCoord, rightX, downYCoord);
-            }
+
+            using Pen dashedDownPen = new(Color.LightGoldenrodYellow, 2f);
+            dashedDownPen.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash;
+            gr.DrawLine(dashedDownPen, startXCoord, downYCoord, rightX, downYCoord);
+
         }
     }
 
     private void DrawResultsPanel(Graphics gr)
     {
         // ResetLists();
-        Rectangle panelRect = new Rectangle(toggleRect.X, toggleRect.Y + 35, 330, lastPanelHeight);
-        gr.FillRectangle(panelBgBrush, panelRect);
+        Rectangle panelRect = new (this.toggleRect.X, this.toggleRect.Y + 35, 330, this.lastPanelHeight);
+        gr.FillRectangle(this.panelBgBrush, panelRect);
 
         int tx = panelRect.X + 12, ty = panelRect.Y + 12;
 
-        string deltaSign = currentDelta >= 0 ? "+" : "";
-        string deltaText = $" NOW: {deltaSign}{currentDelta:F1}";
-        Brush deltaBrush = currentDelta >= 0 ? Brushes.LimeGreen : Brushes.Red;
+        string deltaSign = this.currentDelta >= 0 ? "+" : "";
+        string deltaText = $" NOW: {deltaSign}{this.currentDelta:F1}";
+        Brush deltaBrush = this.currentDelta >= 0 ? Brushes.LimeGreen : Brushes.Red;
 
         
 
-        string dynamicTitle = "";
-        if(effectiveSession != null)
+        string dynamicTitle;
+        if(this.effectiveSession != null)
         {
             string candlesInfo = this.currentCandleCount < this.MinCandles ? $"Waiting for {(this.MinCandles > 1 ? this.MinCandles : "FIRST")} candle{(this.MinCandles > 1 ? "s" : "")}" : $"{this.currentCandleCount} candles";
-            dynamicTitle = $"{effectiveSession} ({candlesInfo})";
+            dynamicTitle = $"{this.effectiveSession} ({candlesInfo})";
             //currentAnalysisText = null;
         }
         else
         {
             dynamicTitle = "NO ACTIVE SESSION";
-            lastPanelHeight = 100;
-            currentAnalysisText = null;
+            this.lastPanelHeight = 100;
+            this.currentAnalysisText = null;
 
         }
-        gr.DrawString(dynamicTitle, headerFont, Brushes.Orange, tx, ty);
-        float titleWidth = gr.MeasureString(dynamicTitle, headerFont).Width;
-        if (candlesResults.Count > 0)
+        gr.DrawString(dynamicTitle, this.headerFont, Brushes.Orange, tx, ty);
+        float titleWidth = gr.MeasureString(dynamicTitle, this.headerFont).Width;
+        if (this.candlesResults.Count > 0)
         {
-            gr.DrawString(deltaText, headerFont, deltaBrush,30+ titleWidth, ty);
+            gr.DrawString(deltaText, this.headerFont, deltaBrush,30+ titleWidth, ty);
         }
-        if (effectiveSession == null)
+        if (this.effectiveSession == null)
         {
-            lastPanelHeight = ty - panelRect.Y + 30;
+            this.lastPanelHeight = ty - panelRect.Y + 30;
             return;
         }
         ty += 32;
-        gr.DrawString("CANDLE MATCHES", headerFont, Brushes.Orange, tx, ty);
+        gr.DrawString("CANDLE MATCHES", this.headerFont, Brushes.Orange, tx, ty);
         ty += 18;
         
 
         if ( this.currentCandleCount < this.MinCandles)
         {
-            currentAnalysisText = null;
-            gr.DrawString($"WAITING FOR {(this.MinCandles > 1 ? this.MinCandles : "FIRST")} CLOSED CANDLE{(this.MinCandles > 1 ? "S" : "")} ", dataFont, Brushes.Gray, tx, ty+5);
-            lastPanelHeight = ty - panelRect.Y + 30;
+            this.currentAnalysisText = null;
+            gr.DrawString($"WAITING FOR {(this.MinCandles > 1 ? this.MinCandles : "FIRST")} CLOSED CANDLE{(this.MinCandles > 1 ? "S" : "")} ", this.dataFont, Brushes.Gray, tx, ty+5);
+            this.lastPanelHeight = ty - panelRect.Y + 30;
             ty += 18;
             //return;
         }
-        else if (candlesResults == null || candlesResults.Count == 0)
+        else if (this.candlesResults == null || this.candlesResults.Count == 0)
         {
-            if (currentAnalysisText != "Loading new Analysis...") currentAnalysisText = null;
-            gr.DrawString("WAITING FOR DATA...", dataFont, Brushes.Gray, tx, ty+5);
-            lastPanelHeight = ty - panelRect.Y + 30;
+            if (this.currentAnalysisText != "Loading new Analysis...") this.currentAnalysisText = null;
+            gr.DrawString("WAITING FOR DATA...", this.dataFont, Brushes.Gray, tx, ty+5);
+            this.lastPanelHeight = ty - panelRect.Y + 30;
             ty += 18;
             //return;
         }
@@ -519,112 +517,105 @@ public class RetroVis : Indicator
         {
             // SESSION DATA
             Brush edgeBrush = Brushes.White;
-            if (candlesSummary.EdgeRatio > 2.0 && Math.Abs(candlesSummary.Confidence) > 70)
-                edgeBrush = (candlesSummary.AvgUp > Math.Abs(candlesSummary.AvgDown)) ? Brushes.LimeGreen : Brushes.Red;
-            else if (candlesSummary.EdgeRatio > 1.2)
+            if (this.candlesSummary.EdgeRatio > 2.0 && Math.Abs(this.candlesSummary.Confidence) > 70)
+                edgeBrush = (this.candlesSummary.AvgUp > Math.Abs(this.candlesSummary.AvgDown)) ? Brushes.LimeGreen : Brushes.Red;
+            else if (this.candlesSummary.EdgeRatio > 1.2)
                 edgeBrush = Brushes.Gold;
-            Rectangle candleSummaryRect = new Rectangle(tx, ty, panelRect.Width - 24, 45);
+            Rectangle candleSummaryRect = new (tx, ty, panelRect.Width - 24, 45);
             gr.DrawRectangle(Pens.DimGray, candleSummaryRect);
 
-            string summaryText = $"SESS U:+{candlesSummary.AvgUp:F1} | D:-{candlesSummary.AvgDown:F1} | ";
-            gr.DrawString(summaryText, dataFont, Brushes.White, tx + 5, ty + 5);
-            float summaryWidth = gr.MeasureString(summaryText, dataFont).Width;
-            string edgeText = $"E:{(Math.Abs(candlesSummary.AvgDown) > candlesSummary.AvgUp ? "-" : "+")}{candlesSummary.EdgeRatio:F2} ({candlesSummary.Confidence:F1}%)";
-            gr.DrawString(edgeText, dataFont, edgeBrush, tx + 5 + summaryWidth, ty + 5);
+            string summaryText = $"SESS U:+{this.candlesSummary.AvgUp:F1} | D:-{this.candlesSummary.AvgDown:F1} | ";
+            gr.DrawString(summaryText, this.dataFont, Brushes.White, tx + 5, ty + 5);
+            float summaryWidth = gr.MeasureString(summaryText, this.dataFont).Width;
+            string edgeText = $"E:{(Math.Abs(this.candlesSummary.AvgDown) > this.candlesSummary.AvgUp ? "-" : "+")}{this.candlesSummary.EdgeRatio:F2} ({this.candlesSummary.Confidence:F1}%)";
+            gr.DrawString(edgeText, this.dataFont, edgeBrush, tx + 5 + summaryWidth, ty + 5);
 
             ty += 24;
 
             // NEXT CANDLE DATA
             edgeBrush = Brushes.White;
-            if (nextCandle.EdgeRatio > 2.0 && Math.Abs(nextCandle.Confidence) > 70)
-                edgeBrush = (nextCandle.AvgUp > Math.Abs(nextCandle.AvgDown)) ? Brushes.LimeGreen : Brushes.Red;
-            else if (nextCandle.EdgeRatio > 1.2)
+            if (this.nextCandle.EdgeRatio > 2.0 && Math.Abs(this.nextCandle.Confidence) > 70)
+                edgeBrush = (this.nextCandle.AvgUp > Math.Abs(this.nextCandle.AvgDown)) ? Brushes.LimeGreen : Brushes.Red;
+            else if (this.nextCandle.EdgeRatio > 1.2)
                 edgeBrush = Brushes.Gold;
 
-            summaryText = $"NXT U:+{nextCandle.AvgUp:F1} | D:-{nextCandle.AvgDown:F1} | ";
-            gr.DrawString(summaryText, dataFont, Brushes.White, tx + 5, ty);
-            summaryWidth = gr.MeasureString(summaryText, dataFont).Width;
-            edgeText = $"E:{(Math.Abs(nextCandle.AvgDown) > nextCandle.AvgUp ? "-" : "+")}{nextCandle.EdgeRatio:F2} ({nextCandle.Confidence:F1}%)";
-            gr.DrawString(edgeText, dataFont, edgeBrush, tx + 5 + summaryWidth, ty);
+            summaryText = $"NXT U:+{this.nextCandle.AvgUp:F1} | D:-{this.nextCandle.AvgDown:F1} | ";
+            gr.DrawString(summaryText, this.dataFont, Brushes.White, tx + 5, ty);
+            summaryWidth = gr.MeasureString(summaryText, this.dataFont).Width;
+            edgeText = $"E:{(Math.Abs(this.nextCandle.AvgDown) > this.nextCandle.AvgUp ? "-" : "+")}{this.nextCandle.EdgeRatio:F2} ({this.nextCandle.Confidence:F1}%)";
+            gr.DrawString(edgeText, this.dataFont, edgeBrush, tx + 5 + summaryWidth, ty);
 
             ty += 30;
 
-            foreach (var m in candlesResults)
+            foreach (var m in this.candlesResults)
             {
                 var matchRect = new RectangleF(tx, ty, panelRect.Width - 24, 18);
-                gr.FillRectangle(matchBgBrush, matchRect);
-                matchClickAreas.Add(matchRect);
+                gr.FillRectangle(this.matchBgBrush, matchRect);
+                this.matchClickAreas.Add(matchRect);
 
                 DateTime matchDt = DateTimeOffset.FromUnixTimeSeconds(m.Timestamp).DateTime;
                 string dateStr = matchDt.ToString("yyyy-MM-dd");
 
-                matchDates.Add(dateStr);
+                this.matchDates.Add(dateStr);
 
-                gr.DrawString($"{dateStr} (MATCH:{m.Similarity:F1}%)", dataFont, Brushes.Gray, tx, ty);
+                gr.DrawString($"{dateStr} (MATCH:{m.Similarity:F1}%)", this.dataFont, Brushes.Gray, tx, ty);
 
                 ty += 18;
             }
         }
         
 
-        if (contextResults != null && contextResults.Count > 0)
+        if (this.contextResults != null && this.contextResults.Count > 0)
         {
              ty += 10;
-            gr.DrawString("CONTEXT MATCHES", headerFont, Brushes.Orange, tx, ty);
+            gr.DrawString("CONTEXT MATCHES", this.headerFont, Brushes.Orange, tx, ty);
             ty += 18;
 
             Brush ctxEdgeBrush = Brushes.White;
-            if (contextSummary.EdgeRatio > 2.0 && Math.Abs(contextSummary.Confidence) > 70)
-                ctxEdgeBrush = (contextSummary.AvgUp > Math.Abs(contextSummary.AvgDown)) ? Brushes.LimeGreen : Brushes.Red;
-            else if (contextSummary.EdgeRatio > 1.2)
+            if (this.contextSummary.EdgeRatio > 2.0 && Math.Abs(this.contextSummary.Confidence) > 70)
+                ctxEdgeBrush = (this.contextSummary.AvgUp > Math.Abs(this.contextSummary.AvgDown)) ? Brushes.LimeGreen : Brushes.Red;
+            else if (this.contextSummary.EdgeRatio > 1.2)
                 ctxEdgeBrush = Brushes.Gold;
 
-            Rectangle ctxSummaryRect = new Rectangle(tx, ty, panelRect.Width - 24, 25);
+            Rectangle ctxSummaryRect = new (tx, ty, panelRect.Width - 24, 25);
             gr.DrawRectangle(Pens.DimGray, ctxSummaryRect);
 
 
-            string ctxSummaryText = $"SESS U:+{contextSummary.AvgUp:F1} | D:-{contextSummary.AvgDown:F1} | ";
-            gr.DrawString(ctxSummaryText, dataFont, Brushes.LightGray, tx + 5, ty + 5);
-            float ctxSummaryWidth = gr.MeasureString(ctxSummaryText, dataFont).Width;
-            gr.DrawString($"E: {(Math.Abs(contextSummary.AvgDown) > contextSummary.AvgUp ? "-" : "+")}{contextSummary.EdgeRatio:F2} ({contextSummary.Confidence:F1}%)", dataFont, ctxEdgeBrush, tx + 5 + ctxSummaryWidth, ty + 5);
+            string ctxSummaryText = $"SESS U:+{this.contextSummary.AvgUp:F1} | D:-{this.contextSummary.AvgDown:F1} | ";
+            gr.DrawString(ctxSummaryText, this.dataFont, Brushes.LightGray, tx + 5, ty + 5);
+            float ctxSummaryWidth = gr.MeasureString(ctxSummaryText, this.dataFont).Width;
+            gr.DrawString($"E: {(Math.Abs(this.contextSummary.AvgDown) > this.contextSummary.AvgUp ? "-" : "+")}{this.contextSummary.EdgeRatio:F2} ({this.contextSummary.Confidence:F1}%)", this.dataFont, ctxEdgeBrush, tx + 5 + ctxSummaryWidth, ty + 5);
 
             ty += 35;
 
-            foreach (var m in contextResults)
+            foreach (var m in this.contextResults)
             {
 
                 var ctxRect = new RectangleF(tx, ty, panelRect.Width - 24, 18);
-                gr.FillRectangle(matchBgBrush, ctxRect);
-                contextClickAreas.Add(ctxRect);
+                gr.FillRectangle(this.matchBgBrush, ctxRect);
+                this.contextClickAreas.Add(ctxRect);
 
                 DateTime matchDt = DateTimeOffset.FromUnixTimeSeconds(m.Timestamp).DateTime;
                 string dateStr = matchDt.ToString("yyyy-MM-dd");
 
-                contextDates.Add(dateStr);
+                this.contextDates.Add(dateStr);
 
-                gr.DrawString($"{dateStr} (MATCH:{m.Similarity:F1}%)", dataFont, Brushes.Gray, tx, ty);
+                gr.DrawString($"{dateStr} (MATCH:{m.Similarity:F1}%)", this.dataFont, Brushes.Gray, tx, ty);
                 ty += 18;
 
             }
             
         }
-        lastPanelHeight = ty - panelRect.Y + 10;
+        this.lastPanelHeight = ty - panelRect.Y + 10;
     }
 
     private void DrawAiPanel(Graphics gr)
     {
         if (string.IsNullOrEmpty(this.currentAnalysisText)) return;
-
-        string cleanedAnalysis = this.currentAnalysisText
-            .Replace("###", "")         // Rimuovi il Markdown     
-            .Replace("**", "")         // Rimuovi il Markdown
-            .Replace("\n\n", "\n")     // Rimpiazza i doppi a capo con a capo singolo
-            .Trim();                   // Rimuovi spazi extra
         
-
         // --- CONFIGURAZIONE ---
         float x = 340;
-        float y = toggleRect.Y + 35; // Punto di partenza sotto i tuoi moduli
+        float y = this.toggleRect.Y + 35; // Punto di partenza sotto i tuoi moduli
         float width = 450; // Larghezza fissa del blocco
         float padding = 12;
 
@@ -633,32 +624,32 @@ public class RetroVis : Indicator
         string cleanText = this.currentAnalysisText.Replace("**", "");
 
         // Misuriamo quanto spazio occupa il testo data la larghezza 'width'
-        SizeF textSize = gr.MeasureString(cleanText, bodyFont, (int)width);
+        SizeF textSize = gr.MeasureString(cleanText, this.bodyFont, (int)width);
 
         // L'altezza totale è: Titolo + Testo misurato + Padding vari
-        float newHeight = headerFont.Height + textSize.Height + (padding * 3);
+        float newHeight = this.headerFont.Height + textSize.Height + (padding * 3);
 
         // --- 2. DISEGNO SFONDO (Autoadattivo) ---
         // Usiamo l'altezza calcolata al volo o quella salvata al ciclo precedente
         var bgRect = new RectangleF(x, y, width + (padding * 2), newHeight);
         
-        gr.FillRectangle(panelBgBrush, bgRect);
+        gr.FillRectangle(this.panelBgBrush, bgRect);
         //gr.DrawRectangle(Pens.Gray, Rectangle.Round(bgRect)); // Bordo sottile
 
 
         // --- 3. DISEGNO TESTO ---
         // Titolo
-        gr.DrawString("AI ANALYSIS", headerFont, Brushes.Orange, x + padding, y + padding);
+        gr.DrawString("AI ANALYSIS", this.headerFont, Brushes.Orange, x + padding, y + padding);
 
         // Corpo del testo (senza alcun flag di troncamento o NoWrap)
         var bodyRect = new RectangleF(
             x + padding,
-            y + padding + headerFont.Height + 5,
+            y + padding + this.headerFont.Height + 5,
             width,
             textSize.Height + 10
         );
 
-        gr.DrawString(cleanText, bodyFont, Brushes.LightGray, bodyRect);
+        gr.DrawString(cleanText, this.bodyFont, Brushes.LightGray, bodyRect);
 
         // --- 4. AGGIORNAMENTO VARIABILE PER CICLO SUCCESSIVO ---
         this.aiBoxHeight = newHeight;
@@ -666,40 +657,40 @@ public class RetroVis : Indicator
     }
     private void OnChartMouseDown(object sender, ChartMouseNativeEventArgs e)
     {
-        chartMouseDownReceived = true;
+        this.chartMouseDownReceived = true;
         //Log("OnChartMouseDown - setting chartMouseDownReceived: " + chartMouseDownReceived);
     }
     private void OnChartMouseUp(object sender, ChartMouseNativeEventArgs e)
     {
         //Log("OnChartMouseUp - reading chartMouseDownReceived: " + chartMouseDownReceived);
         //Log("OnChartMouseUp - checking chartMouseDownReceived: ");
-        if (!chartMouseDownReceived) return;  // click orfano, ignoralo
+        if (!this.chartMouseDownReceived) return;  // click orfano, ignoralo
         //Log("OnChartMouseUp - checking checked ");
-        chartMouseDownReceived = false;
+        this.chartMouseDownReceived = false;
 
-        if (toggleRect.Contains(e.Location))
+        if (this.toggleRect.Contains(e.Location))
         {
-            isPanelVisible = !isPanelVisible;
+            this.isPanelVisible = !this.isPanelVisible;
             //Log("OnChartMouseUp - Target: toggleRect");
             return;
         }
 
-        if (backtestBtnRect.Contains(e.Location))
+        if (this.backtestBtnRect.Contains(e.Location))
         {
-            isBacktestMode = !isBacktestMode;
-            if (!isBacktestMode) lastProcessedBarTime = default; // Reset per tornare in real-time
+            this.isBacktestMode = !this.isBacktestMode;
+            if (!this.isBacktestMode) this.lastProcessedBarTime = default; // Reset per tornare in real-time
             //Log("OnChartMouseUp - Target: backtestBtnRect");
             return;
         }
 
-        if (isPanelVisible)
+        if (this.isPanelVisible)
         {
-            for (int i = 0; i < matchClickAreas.Count; i++)
+            for (int i = 0; i < this.matchClickAreas.Count; i++)
             {
-                if (matchClickAreas[i].Contains(e.Location))
+                if (this.matchClickAreas[i].Contains(e.Location))
                 {
-                    string date = matchDates[i];
-                    string url = $"http://127.0.0.1:9999/visualize?symbol={ticker}&date={date}&timeframe={GetFormattedTimeframe()}";
+                    string date = this.matchDates[i];
+                    string url = $"http://127.0.0.1:9999/visualize?symbol={this.ticker}&date={date}&timeframe={this.GetFormattedTimeframe()}";
                     
                     try
                     {
@@ -719,12 +710,12 @@ public class RetroVis : Indicator
                     break; 
                 }
             }
-            for (int i = 0; i < contextClickAreas.Count; i++)
+            for (int i = 0; i < this.contextClickAreas.Count; i++)
             {
-                if (contextClickAreas[i].Contains(e.Location))
+                if (this.contextClickAreas[i].Contains(e.Location))
                 {
-                    string date = contextDates[i];
-                    string url = $"http://127.0.0.1:9999/visualize?symbol={ticker}&date={date}";
+                    string date = this.contextDates[i];
+                    string url = $"http://127.0.0.1:9999/visualize?symbol={this.ticker}&date={date}";
                     try { 
                         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = url, UseShellExecute = true });
                         //Log("OnChartMouseUp - Target: Context match");
@@ -737,42 +728,42 @@ public class RetroVis : Indicator
 
         }
 
-        if (isBacktestMode)
+        if (this.isBacktestMode)
         {
             //Log("OnChartMouseUp - Target: Backtest");
             DateTime clickTime = e.Window.CoordinatesConverter.GetTime(e.X);
-            int candleIndex = GetIndexByTime(clickTime);
-            RunManualAnalysis(candleIndex);
+            int candleIndex = this.GetIndexByTime(clickTime);
+            this.RunManualAnalysis(candleIndex);
         }
     }
 
     protected void RunManualAnalysis(int candleIndex)
     {
         // Pulizia visiva prima del nuovo calcolo
-        Reset();
+        this.Reset();
         // Esegui l'analisi sulla candela cliccata
-        ProcessAnalysis(candleIndex);
+        this.ProcessAnalysis(candleIndex);
     }
 
     private void ProcessAnalysis(int refIndex)
     {
-        analysisIndex = refIndex;
+        this.analysisIndex = refIndex;
         //Log("ProcessAnalysis called with refIndex: " + refIndex);
-        DateTime referenceTimeUtc = Time(refIndex).ToUniversalTime();
+        DateTime referenceTimeUtc = this.Time(refIndex).ToUniversalTime();
 
 
         DateTime londonNow = TimeZoneInfo.ConvertTimeFromUtc(referenceTimeUtc, LondonTz);
         DateTime nyNow = TimeZoneInfo.ConvertTimeFromUtc(referenceTimeUtc, NyTz);
 
-        string sessionToUse = SessionId;
-        if (SessionId == "AUTO")
+        string sessionToUse = this.SessionId;
+        if (this.SessionId == "AUTO")
         {
             int londonTime = londonNow.Hour * 100 + londonNow.Minute;
             int nyTime = nyNow.Hour * 100 + nyNow.Minute;
 
             if (londonTime >= 800 && londonTime < 1425 && nyTime < 930) sessionToUse = "LONDON_OPEN";
             else if (nyTime >= 930 && nyTime < 1705) sessionToUse = "NY_OPEN";
-            else sessionToUse = effectiveSession = null;
+            else sessionToUse = this.effectiveSession = null;
         }
 
         if (sessionToUse == null) return;
@@ -784,64 +775,64 @@ public class RetroVis : Indicator
 
         // --- RICERCA OPEN BAR ---
         // Cerchiamo l'apertura andando a ritroso partendo da refIndex
-        openBarIndex = -1;
-        for (int i = refIndex; i < Math.Min(Count, refIndex + 200); i++) // Aumentato a 200 per sicurezza
+        this.openBarIndex = -1;
+        for (int i = refIndex; i < Math.Min(this.Count, refIndex + 200); i++) // Aumentato a 200 per sicurezza
         {
-            DateTime barInSessionTime = TimeZoneInfo.ConvertTimeFromUtc(Time(i).ToUniversalTime(), sessionTz);
+            DateTime barInSessionTime = TimeZoneInfo.ConvertTimeFromUtc(this.Time(i).ToUniversalTime(), sessionTz);
             if (barInSessionTime.Hour == targetHour && barInSessionTime.Minute == targetMinute)
             {
-                openBarIndex = i;
+                this.openBarIndex = i;
                 break;
             }
         }
         //Log("openBarIndex: "+ openBarIndex);
 
-        if (openBarIndex == -1) return;
-        else if (openBarIndex >= MaxCandles && candlesResults.Count > 0) return;
+        if (this.openBarIndex == -1) return;
+        else if (this.openBarIndex >= this.MaxCandles && this.candlesResults.Count > 0) return;
 
-        if (openBarIndex != -1)
+        if (this.openBarIndex != -1)
         {
-            DateTime foundBarTime = TimeZoneInfo.ConvertTimeFromUtc(Time(openBarIndex).ToUniversalTime(), sessionTz);
+            DateTime foundBarTime = TimeZoneInfo.ConvertTimeFromUtc(this.Time(this.openBarIndex).ToUniversalTime(), sessionTz);
 
             if (foundBarTime.Hour == 9 && foundBarTime.Minute == 30)
-                effectiveSession = "NY_OPEN";
+                this.effectiveSession = "NY_OPEN";
             else if (foundBarTime.Hour == 8 && foundBarTime.Minute == 0)
-                effectiveSession = "LONDON_OPEN";
+                this.effectiveSession = "LONDON_OPEN";
         }
-        //Log("effectiveSession: " + effectiveSession);
+        //Log("effectiveSession: " + this.effectiveSession);
         // --- FETCH CONTEXT ---
-        string sessionDateKey = $"{sessionToUse}_{Time(openBarIndex):yyyy-MM-dd}";
-        //Log("sessionDateKey: " + sessionDateKey+ " - lastContextSessionDate: "+ lastContextSessionDate);
-        if (sessionDateKey != lastContextSessionDate)
+        string sessionDateKey = $"{sessionToUse}_{this.Time(this.openBarIndex):yyyy-MM-dd}";
+        //Log("sessionDateKey: " + sessionDateKey+ " - lastContextSessionDate: "+ this.lastContextSessionDate);
+        if (sessionDateKey != this.lastContextSessionDate)
         {
-            lastContextSessionDate = sessionDateKey;
+            this.lastContextSessionDate = sessionDateKey;
             //Log("FetchContextMatchesAsync");
-            _ = FetchContextMatchesAsync(openBarIndex);
+            _ = this.FetchContextMatchesAsync();
         }
-        if ((openBarIndex - refIndex) < MinCandles) return;
+        if ((this.openBarIndex - refIndex) < this.MinCandles) return;
         // --- PREPARAZIONE CANDLES (Usa refIndex come limite superiore) ---
         var candlesToInquire = new List<RawCandle>();
-        int limit = Math.Min(openBarIndex - refIndex, MaxCandles);
+        int limit = Math.Min(this.openBarIndex - refIndex, this.MaxCandles);
 
         // Ciclo che parte dall'apertura e arriva fino alla candela di riferimento
-        for (int i = openBarIndex; i > refIndex && i > (openBarIndex - limit); i--)
+        for (int i = this.openBarIndex; i > refIndex && i > (this.openBarIndex - limit); i--)
         {
-            DateTime bTime = TimeZoneInfo.ConvertTimeFromUtc(Time(i).ToUniversalTime(), NyTz);
+            DateTime bTime = TimeZoneInfo.ConvertTimeFromUtc(this.Time(i).ToUniversalTime(), NyTz);
             candlesToInquire.Add(new RawCandle
             {
                 Timestamp = (uint)((DateTimeOffset)bTime).ToUnixTimeSeconds(),
-                Open = (float)Open(i),
-                High = (float)High(i),
-                Low = (float)Low(i),
-                Close = (float)Close(i),
-                Volume = (float)Volume(i)
+                Open = (float)this.Open(i),
+                High = (float)this.High(i),
+                Low = (float)this.Low(i),
+                Close = (float)this.Close(i),
+                Volume = (float)this.Volume(i)
             });
         }
 
-        currentPriceBase = (float)Open(openBarIndex);
-        currentDelta = (float)Close(refIndex) - currentPriceBase;
+        this.currentPriceBase = (float)this.Open(this.openBarIndex);
+        this.currentDelta = (float)this.Close(refIndex) - this.currentPriceBase;
         this.currentCandleCount = candlesToInquire.Count;
-        _ = FetchMatchesAsync(candlesToInquire);
+        _ = this.FetchMatchesAsync(candlesToInquire);
     }
 
     private string GetFormattedTimeframe()
@@ -852,10 +843,10 @@ public class RetroVis : Indicator
         // Trasforma "5m" in "M5", "15m" in "M15", "1h" in "H1", ecc.
         string tf = aggregation.Period.Format();
 
-        if (tf.EndsWith("m"))
+        if (tf.EndsWith('m'))
             return "M" + tf.Replace("m", "");
 
-        if (tf.EndsWith("h"))
+        if (tf.EndsWith('h'))
             return "H" + tf.Replace("h", "");
 
         return tf; // Fallback se è già nel formato corretto o ignoto
@@ -864,28 +855,29 @@ public class RetroVis : Indicator
     public override void Dispose()
     {
         //Log("ondispose");
-        this.CurrentChart.MouseUp -= OnChartMouseUp;
-        this.CurrentChart.MouseDown -= OnChartMouseDown;
+        this.CurrentChart.MouseUp -= this.OnChartMouseUp;
+        this.CurrentChart.MouseDown -= this.OnChartMouseDown;
+        GC.SuppressFinalize(this);
     }
 
-    protected void initTicker()
+    protected void InitTicker()
     {
         string symbol = this.Symbol.Description.ToLower();
         if (symbol.Contains("nasdaq"))
         {
-            ticker = "NQ";
+            this.ticker = "NQ";
         }
         else if (symbol.Contains("s&p"))
         {
-            ticker = "ES";
+            this.ticker = "ES";
         }
         else if (symbol.Contains("gold"))
         {
-            ticker = "GC";
+            this.ticker = "GC";
         }
         else if (symbol.Contains("dow"))
         {
-            ticker = "YM";
+            this.ticker = "YM";
         }
     }
 
@@ -893,10 +885,10 @@ public class RetroVis : Indicator
     private int GetIndexByTime(DateTime clickedTime)
     {
         // 'Count' è il numero totale di candele sul grafico
-        for (int i = 0; i < Count; i++)
+        for (int i = 0; i < this.Count; i++)
         {
             // Time(i) restituisce l'orario della candela all'indice i
-            if (Time(i) <= clickedTime)
+            if (this.Time(i) <= clickedTime)
             {
                 return Math.Max(0, i-1);
             }
@@ -1015,9 +1007,10 @@ public class RetroVis : Indicator
     }
     public class AiResponse
     {
-        public string status { get; set; }
-        public string analysis { get; set; }
-        public bool cached { get; set; }
+        [JsonPropertyName("status")] public string Status { get; set; }
+        [JsonPropertyName("analysis")] public string Analysis { get; set; }
+        [JsonPropertyName("cached")] public bool Cached { get; set; }
+        
     }
     #endregion
 }
