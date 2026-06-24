@@ -66,7 +66,6 @@ impl RetroVisCache {
             .clone()
     }
 
-    #[allow(dead_code)]
     pub fn get_session_history(
         &self,
         asset: &str,

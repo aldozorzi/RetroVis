@@ -1,6 +1,7 @@
 pub fn median(values: &mut [f32]) -> f32 {
     if values.is_empty() { return 0.0; }
-    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    values.sort_by(|a, b| a.total_cmp(b));
+
     values[values.len() / 2]
 }
 
@@ -30,7 +31,7 @@ fn weighted_median(values: &[f32], weights: &[f32]) -> f32 {
     if values.is_empty() { return 0.0; }
 
     let mut indexed: Vec<(f32, f32)> = values.iter().zip(weights.iter()).map(|(&v, &w)| (v, w)).collect();
-    indexed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    indexed.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     let total_weight: f32 = indexed.iter().map(|(_, w)| w).sum();
     let half_weight = total_weight / 2.0;

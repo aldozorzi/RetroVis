@@ -42,7 +42,6 @@ pub struct CandleStore {
 
 impl CandleStore {
     pub fn len(&self) -> usize { self.days.len() }
-    pub fn is_empty(&self) -> bool { self.days.is_empty() }
 
     pub fn get(&self, idx: usize) -> Option<(u32, &[RawCandle<f32>])> {
         self.days.get(idx).map(|(d, r)| (*d, &self.candles[r.clone()]))

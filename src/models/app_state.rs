@@ -11,7 +11,6 @@ pub struct AppState {
     pub engines: HashMap<String, SearchEngine>,
     pub sessions: HashMap<String, SessionConfig>,
     pub cache: Arc<crate::cache::RetroVisCache>,
-    pub broker: Arc<dyn AiProvider>,
     pub ai_service: Arc<AiAnalysisService>,
 }
 
