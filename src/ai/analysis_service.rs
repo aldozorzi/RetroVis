@@ -3,7 +3,7 @@ use dashmap::DashMap;
 use tokio::sync::broadcast;
 use serde_json::Value;
 use crate::models::{CandleCacheKey, AiAnalysisService};
-use crate::ai_provider::AiProvider;
+use crate::ai::AiProvider;
 use crate::cache::RetroVisCache;
 
 impl AiAnalysisService {

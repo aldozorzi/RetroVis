@@ -13,19 +13,19 @@ mod models;
 mod parser;
 mod engine;
 mod cache;
-mod gemini;
 mod stats;
-mod determination_engine;
-mod ai_analysis;
-mod ai_provider;
+mod ai;
+
 mod http_client;
 mod service;
 mod handlers;
+mod chart_data;
 mod visualize;
 
+
 use models::AppState;
-use crate::ai_provider::AiProvider;
-use gemini::GeminiBroker;
+use crate::ai::AiProvider;
+use ai::GeminiBroker;
 use engine::SearchEngine;
 use handlers::{ai_analysis_handler, context_matches_handler, day_details_handler, search_handler};
 use visualize::visualize_handler;

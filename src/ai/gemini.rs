@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use crate::http_client::HttpClient;
-use crate::ai_provider::AiProvider;
-use crate::determination_engine::DeterminationEngine;
+use crate::ai::AiProvider;
+use crate::ai::DeterminationEngine;
 
 use std::time::Duration;
 // use tokio::time::timeout;

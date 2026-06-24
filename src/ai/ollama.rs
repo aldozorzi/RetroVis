@@ -1,6 +1,6 @@
 use serde_json::Value;
 use std::time::Duration;
-use crate::models::AiProvider;
+use crate::ai::AiProvider;
 use crate::http_client::HttpClient;
 // RIMOSSO: use async_trait::async_trait;
 

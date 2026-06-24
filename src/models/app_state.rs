@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use tokio::sync::broadcast;
 use crate::engine::SearchEngine;
 use crate::cache::RetroVisCache;
-use crate::ai_provider::AiProvider;
+use crate::ai::AiProvider;
 use crate::models::{SessionConfig, CandleCacheKey};
 
 pub struct AppState {

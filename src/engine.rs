@@ -108,7 +108,6 @@ impl SearchEngine {
             } else {
                 (0.0, 0.0)
             };
-            // -----------------------------------------------------------------------
 
             outcomes.push(Self::build_outcome(
                 &candles, session, start_idx, day_start_timestamp, target_start_timestamp,
@@ -118,28 +117,6 @@ impl SearchEngine {
 
         outcomes.sort_by(|a, b| a.distance.total_cmp(&b.distance));
         outcomes.into_iter().take(top_k).collect()
-    }
-
-    pub fn get_day_candles(&self, date: u32, timeframe_min: u32, include_prev: bool) -> Vec<crate::models::RawCandle<f32>> {
-        let pos = match self.dataset.find_by_date(date) { 
-        Some(p) => p, 
-        None => return Vec::new() 
-    };
-
-        let raw_prev: &[RawCandle<f32>] = if include_prev && pos > 0 {
-            self.dataset.get(pos - 1).map(|(_, c)| c).unwrap_or(&[])
-        } else {
-            &[]
-        };
-        let (_, raw_curr) = match self.dataset.get(pos) { 
-            Some(d) => d, 
-            None => return Vec::new() 
-        };
-
-        let prev = Self::maybe_resample(raw_prev, timeframe_min);
-        let curr = Self::maybe_resample(raw_curr, timeframe_min);
-
-        prev.iter().chain(curr.iter()).cloned().collect()
     }
 
     pub fn find_context_matches(
@@ -222,7 +199,7 @@ impl SearchEngine {
         let eoh_pct = Self::eoh_pct(candles, start_idx, target_start_timestamp, baseline);
         let actual_end = Self::find_session_end_idx(candles, session, day_start_timestamp, start_idx);
         let (max_high, min_low, last_close) = Self::session_extremes(candles, start_idx, actual_end, baseline);
- 
+
         crate::models::MatchOutcome {
             timestamp: candles[start_idx].timestamp,
             distance,
@@ -283,7 +260,7 @@ impl SearchEngine {
 
     // CSV files are stored at 5-minute native resolution — resampling only
     // kicks in when the caller asks for a coarser timeframe.
-    fn maybe_resample<'a>(raw: &'a [RawCandle<f32>], timeframe_min: u32) -> Cow<'a, [RawCandle<f32>]> {
+    pub(crate) fn maybe_resample<'a>(raw: &'a [RawCandle<f32>], timeframe_min: u32) -> Cow<'a, [RawCandle<f32>]> {
         if timeframe_min == NATIVE_TIMEFRAME_MIN {
             Cow::Borrowed(raw)
         } else {

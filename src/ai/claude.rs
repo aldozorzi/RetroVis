@@ -1,9 +1,7 @@
 use serde_json::{json, Value};
 use std::time::Duration;
-use crate::ai_provider::AiProvider;
+use crate::ai::AiProvider;
 use crate::http_client::{HttpClient, HttpError};
-// RIMOSSO: use async_trait::async_trait;
-// RIMOSSO: use reqwest::Client;
 
 pub struct ClaudeBroker {
     api_key: String,
