@@ -29,6 +29,7 @@ impl ContextCacheKey {
 }
 
 fn str_to_fixed<const N: usize>(s: &str) -> [u8; N] {
+    debug_assert!(s.len() <= N, "identifier '{}' exceeds {} bytes, will be truncated and may collide with other keys", s, N);
     let mut buf = [0u8; N];
     let src = s.as_bytes();
     let amt = src.len().min(N);
