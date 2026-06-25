@@ -38,9 +38,6 @@ public class RetroVis : Indicator
     [InputParameter("Webserver URL", 3)]
     public string ServerUrl = "http://127.0.0.1:9999";
 
-    [InputParameter("Enable AI Analysis",4)]
-    public bool EnableAiAnalysis { get; set; } = false;
-
     [InputParameter("Draw Session Levels", 5)]
     public bool DrawSessionLevels { get; set; } = true;
 
@@ -108,9 +105,6 @@ public class RetroVis : Indicator
     private readonly SolidBrush matchBgBrush = new (Color.FromArgb(0, 180, 100, 30));
     private readonly Pen upPen = new (Color.LimeGreen, 2);
     private readonly Pen downPen = new (Color.Sienna, 2);
-
-
-    private float aiBoxHeight = 100f;
 
     private bool chartMouseDownReceived = false;
 
@@ -311,53 +305,9 @@ public class RetroVis : Indicator
                 this.candlesSummary = fullData.Summary;
 
                 this.nextCandle = fullData.NextCandle;
-                _ = this.FetchAiAnalysis(candles);
             }
         }
         catch (Exception ex) { Log("Error:"+ ex.Message); }
-    }
-
-    private async Task FetchAiAnalysis(List<RawCandle> candles)
-    {
-        if(!this.EnableAiAnalysis) return;
-        try
-        {
-            var lastCandle = candles[candles.Count - 1];
-            uint finalTimestamp = (uint)lastCandle.Timestamp;
-            ContextQueryRequest contextData = this.BuildContextQueryRequest();
-            var request = new AiAnalysisRequest
-            {
-
-                Symbol = this.ticker,
-                SessionId = this.effectiveSession,
-                Candles = candles,
-                Timeframe = this.GetFormattedTimeframe(),
-                Timestamp = finalTimestamp,
-                CurrentPriceAction = lastCandle.Close,
-                SessionOpen = contextData.SessionOpen,
-                PrevClose = contextData.PrevClose,
-                PrevHigh = contextData.PrevHigh,
-                PrevLow = contextData.PrevLow,
-                IntradayHigh = contextData.IntradayHigh,
-                IntradayLow = contextData.IntradayLow,
-                TopK = contextData.TopK
-            };
-            //Log("CurrentPriceAction: " + request.CurrentPriceAction);
-            string json = JsonSerializer.Serialize(request);
-            //Log("AI json:" + json);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-            var response = await this.httpClient.PostAsync($"{this.ServerUrl.TrimEnd('/')}/get-ai-analysis", content);
-            if (response.IsSuccessStatusCode)
-            {
-                var result = await response.Content.ReadFromJsonAsync<AiResponse>();
-
-                if (result != null && result.Status == "success")
-                {
-                    this.currentAnalysisText = result.Analysis;
-                }
-            }
-        }
-        catch (Exception ex) { Log("AI Analysis Error: " + ex.Message); }
     }
 
     private ContextQueryRequest BuildContextQueryRequest()
@@ -478,9 +428,6 @@ public class RetroVis : Indicator
         {
             this.DrawLevels(gr);
             this.DrawResultsPanel(gr);
-            
-            if (this.EnableAiAnalysis)
-                this.DrawAiPanel(gr);
             
         }
     }
@@ -694,52 +641,7 @@ public class RetroVis : Indicator
         this.lastPanelHeight = ty - panelRect.Y + 10;
     }
 
-    private void DrawAiPanel(Graphics gr)
-    {
-        if (string.IsNullOrEmpty(this.currentAnalysisText)) return;
-        
-        // --- CONFIGURAZIONE ---
-        float x = 340;
-        float y = this.toggleRect.Y + 35; // Punto di partenza sotto i tuoi moduli
-        float width = 450; // Larghezza fissa del blocco
-        float padding = 12;
-
-        // --- 1. CALCOLO ALTEZZA NECESSARIA ---
-        // Puliamo il markdown come prima per avere misure reali
-        string cleanText = this.currentAnalysisText.Replace("**", "");
-
-        // Misuriamo quanto spazio occupa il testo data la larghezza 'width'
-        SizeF textSize = gr.MeasureString(cleanText, this.bodyFont, (int)width);
-
-        // L'altezza totale è: Titolo + Testo misurato + Padding vari
-        float newHeight = this.headerFont.Height + textSize.Height + (padding * 3);
-
-        // --- 2. DISEGNO SFONDO (Autoadattivo) ---
-        // Usiamo l'altezza calcolata al volo o quella salvata al ciclo precedente
-        var bgRect = new RectangleF(x, y, width + (padding * 2), newHeight);
-        
-        gr.FillRectangle(this.panelBgBrush, bgRect);
-        //gr.DrawRectangle(Pens.Gray, Rectangle.Round(bgRect)); // Bordo sottile
-
-
-        // --- 3. DISEGNO TESTO ---
-        // Titolo
-        gr.DrawString("AI ANALYSIS", this.headerFont, Brushes.Orange, x + padding, y + padding);
-
-        // Corpo del testo (senza alcun flag di troncamento o NoWrap)
-        var bodyRect = new RectangleF(
-            x + padding,
-            y + padding + this.headerFont.Height + 5,
-            width,
-            textSize.Height + 10
-        );
-
-        gr.DrawString(cleanText, this.bodyFont, Brushes.LightGray, bodyRect);
-
-        // --- 4. AGGIORNAMENTO VARIABILE PER CICLO SUCCESSIVO ---
-        this.aiBoxHeight = newHeight;
-
-    }
+    
     private void OnChartMouseDown(object sender, ChartMouseNativeEventArgs e)
     {
         this.chartMouseDownReceived = true;
@@ -853,7 +755,7 @@ public class RetroVis : Indicator
 
         if (sessionToUse == null) return;
 
-        // --- LOGICA TARGET TIME (Riciclata) ---
+        // --- LOGICA TARGET TIME ---
         int targetHour = (sessionToUse == "NY_OPEN") ? 9 : 8;
         int targetMinute = (sessionToUse == "NY_OPEN") ? 30 : 0;
         TimeZoneInfo sessionTz = (sessionToUse == "NY_OPEN") ? NyTz : LondonTz;
@@ -1074,29 +976,5 @@ public class RetroVis : Indicator
         [JsonPropertyName("timestamp")] public uint Timestamp { get; set; }
     }
 
-    public class AiAnalysisRequest
-    {
-
-        [JsonPropertyName("symbol")] public string Symbol { get; set; }
-        [JsonPropertyName("session_id")] public string SessionId { get; set; }
-        [JsonPropertyName("candles")] public List<RawCandle> Candles { get; set; }
-        [JsonPropertyName("timestamp")] public uint Timestamp { get; set; }
-        [JsonPropertyName("timeframe")] public string Timeframe { get; set; }
-        [JsonPropertyName("current_price_action")] public float CurrentPriceAction { get; set; }
-        [JsonPropertyName("session_open")] public float SessionOpen { get; set; }
-        [JsonPropertyName("prev_close")] public float PrevClose { get; set; }
-        [JsonPropertyName("prev_high")] public float PrevHigh { get; set; }
-        [JsonPropertyName("prev_low")] public float PrevLow { get; set; }
-        [JsonPropertyName("intraday_high")] public float IntradayHigh { get; set; }
-        [JsonPropertyName("intraday_low")] public float IntradayLow { get; set; }
-        [JsonPropertyName("top_k")] public int TopK { get; set; }
-    }
-    public class AiResponse
-    {
-        [JsonPropertyName("status")] public string Status { get; set; }
-        [JsonPropertyName("analysis")] public string Analysis { get; set; }
-        [JsonPropertyName("cached")] public bool Cached { get; set; }
-        
-    }
     #endregion
 }
