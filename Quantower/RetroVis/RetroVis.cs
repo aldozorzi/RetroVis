@@ -41,16 +41,16 @@ public class RetroVis : Indicator
     [InputParameter("Draw Session Levels", 5)]
     public bool DrawSessionLevels { get; set; } = true;
 
-    [InputParameter("Draw Next Candle Levels", 5)]
+    [InputParameter("Draw Next Candle Levels", 6)]
     public bool DrawNextCandleLevels { get; set; } = true;
 
-    [InputParameter("Enable Candle Close Alert", 6)]
+    [InputParameter("Enable Candle Close Alert", 7)]
     public bool EnableCloseAlert { get; set; } = true;
 
-    [InputParameter("Alert Seconds Before Close", 7, 1, 60, 1)]
+    [InputParameter("Alert Seconds Before Close", 8, 1, 60, 1)]
     public int AlertSecondsBeforeClose = 10;
 
-    [InputParameter("Alert Sound File (.wav)", 8)]
+    [InputParameter("Alert Sound File (.wav)", 9)]
     public string AlertSoundPath = @"E:\Risorse\suoni\ding.wav";
 
     #endregion
