@@ -23,4 +23,7 @@
       <HintPath>C:\Quantower\TradingPlatform\v1.146.13\bin\TradingPlatform.BusinessLayer.dll</HintPath>
     </Reference>
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Windows.Extensions" Version="8.0.0" />
+  </ItemGroup>
 </Project>

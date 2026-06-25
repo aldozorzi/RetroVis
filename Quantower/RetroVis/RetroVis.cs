@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Drawing;
 using System.Drawing.Printing;
+using System.IO;
+using System.Media;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Reflection.Metadata;
@@ -45,6 +47,15 @@ public class RetroVis : Indicator
     [InputParameter("Draw Next Candle Levels", 5)]
     public bool DrawNextCandleLevels { get; set; } = true;
 
+    [InputParameter("Enable Candle Close Alert", 6)]
+    public bool EnableCloseAlert { get; set; } = true;
+
+    [InputParameter("Alert Seconds Before Close", 7, 1, 60, 1)]
+    public int AlertSecondsBeforeClose = 10;
+
+    [InputParameter("Alert Sound File (.wav)", 8)]
+    public string AlertSoundPath = @"E:\Risorse\suoni\ding.wav";
+
     #endregion
 
     #region Internal Fields
@@ -61,6 +72,10 @@ public class RetroVis : Indicator
     private int currentCandleCount = 0;
     private string ticker = "";
     private string effectiveSession;
+
+    private SoundPlayer alertSoundPlayer;
+    private string loadedAlertSoundPath = "";
+    private static DateTime lastAlertBarTime = DateTime.MinValue;
 
     private static TimeZoneInfo NyTz ;
     private static TimeZoneInfo LondonTz;
@@ -124,6 +139,8 @@ public class RetroVis : Indicator
         }
 
         this.lastProcessedBarTime = DateTime.MinValue;
+        RetroVis.lastAlertBarTime = DateTime.MinValue;
+        this.InitAlertSound();
         if (this.CurrentChart != null)
         {
             this.CurrentChart.MouseUp -= this.OnChartMouseUp;
@@ -162,11 +179,79 @@ public class RetroVis : Indicator
     protected override void OnSettingsUpdated()
     {
         base.OnSettingsUpdated();
+        this.InitAlertSound();
         this.Reset();
+    }
+
+    private void InitAlertSound()
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(this.AlertSoundPath))
+            {
+                this.alertSoundPlayer = null;
+                this.loadedAlertSoundPath = "";
+                return;
+            }
+            if (this.AlertSoundPath == this.loadedAlertSoundPath && this.alertSoundPlayer != null)
+                return; // già caricato, evita I/O ripetuto
+
+            if (!File.Exists(this.AlertSoundPath))
+            {
+                Log("Alert sound file non trovato: " + this.AlertSoundPath);
+                this.alertSoundPlayer = null;
+                this.loadedAlertSoundPath = "";
+                return;
+            }
+
+            this.alertSoundPlayer = new SoundPlayer(this.AlertSoundPath);
+            this.alertSoundPlayer.Load(); // carica subito in memoria, evita ritardo al primo Play()
+            this.loadedAlertSoundPath = this.AlertSoundPath;
+        }
+        catch (Exception ex)
+        {
+            Log("Errore caricamento alert sound: " + ex.Message);
+            this.alertSoundPlayer = null;
+            this.loadedAlertSoundPath = "";
+        }
+    }
+
+    private void CheckCloseAlert()
+    {
+        if (!this.EnableCloseAlert || this.isBacktestMode) return;
+        if (this.alertSoundPlayer == null) return;
+
+        HistoryAggregationTime aggregation = (HistoryAggregationTime)this.HistoricalData.Aggregation;
+        TimeSpan duration = aggregation.Period.Duration;
+
+        // Solo intraday: escludi D1/W1/MN (>= 1 giorno)
+        if (duration >= TimeSpan.FromDays(1)) return;
+        if (duration <= TimeSpan.Zero) return;
+
+        DateTime currentBarTime = this.Time();
+        if (currentBarTime == RetroVis.lastAlertBarTime) return; // già suonato per questa barra
+
+        DateTime barCloseTimeUtc = currentBarTime.ToUniversalTime() + duration;
+        double secondsRemaining = (barCloseTimeUtc - DateTime.UtcNow).TotalSeconds;
+
+        if (secondsRemaining > 0 && secondsRemaining <= this.AlertSecondsBeforeClose)
+        {
+            RetroVis.lastAlertBarTime = currentBarTime;
+            try
+            {
+                this.alertSoundPlayer.Play(); // asincrono, non blocca il thread di update
+            }
+            catch (Exception ex)
+            {
+                Log("Errore riproduzione alert sound: " + ex.Message);
+            }
+        }
     }
 
     protected override void OnUpdate(UpdateArgs args)
     {
+        this.CheckCloseAlert();
+
         if (this.isBacktestMode || !this.isPanelVisible) return;
         this.currentDelta = this.Close(0) - this.currentPriceBase;
 
@@ -857,6 +942,7 @@ public class RetroVis : Indicator
         //Log("ondispose");
         this.CurrentChart.MouseUp -= this.OnChartMouseUp;
         this.CurrentChart.MouseDown -= this.OnChartMouseDown;
+        this.alertSoundPlayer?.Dispose();
         GC.SuppressFinalize(this);
     }
 

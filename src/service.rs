@@ -4,7 +4,6 @@ use crate::models::{
 };
 use crate::stats::{median, weighted_projection};
 use crate::engine::SearchEngine;
-use serde_json::json;
 
 pub fn compute_candle_history(
     state: &AppState,
@@ -116,40 +115,4 @@ pub fn lookup_engine_and_session<'a>(
     let engine = state.engines.get(symbol).expect("Ticker not found");
     let session = state.sessions.get(session_id).expect("Session not found");
     (engine, session)
-}
-
-/// Cache-aside: reuse cached per-candle results when present, otherwise compute fresh.
-pub fn fetch_or_compute_history(state: &AppState, req: &crate::models::AiAnalysisRequest) -> Vec<CachedResult> {
-    let cached = state.cache.get_session_history(
-        &req.symbol, &req.timeframe, req.timestamp, req.candles.len()
-    );
-    if !cached.is_empty() {
-        return cached;
-    }
-    compute_candle_history(
-        state, &req.symbol, &req.timeframe, &req.session_id,
-        req.timestamp, &req.candles, req.session_open as f32, req.top_k,
-    )
-}
-
-/// Cache-aside for the context match: reuse if present, otherwise compute fresh.
-pub fn fetch_or_compute_context(state: &AppState, req: &crate::models::AiAnalysisRequest) -> CachedResult {
-    state.cache.get_context(&req.symbol, req.timestamp).unwrap_or_else(|| {
-        compute_context(
-            state, &req.symbol, &req.session_id, req.timestamp,
-            req.session_open as f32, req.prev_close, req.prev_high,
-            req.prev_low, req.intraday_high, req.intraday_low, req.top_k,
-        )
-    })
-}
-
-pub fn build_ai_payload(req: &crate::models::AiAnalysisRequest, history: &[CachedResult], context: &CachedResult) -> serde_json::Value {
-    json!({
-        "symbol": req.symbol,
-        "session_id": req.session_id,
-        "current_price_action": req.current_price_action,
-        "evolution_history": history,
-        "context": context,
-        "session_open": req.session_open,
-    })
 }

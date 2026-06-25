@@ -1,6 +1,5 @@
 use dashmap::DashMap;
 use crate::models::{CachedResult, CandleCacheKey, ContextCacheKey};
-use std::sync::Arc;
 
 pub struct RetroVisCache {
     pub candle_results: DashMap<CandleCacheKey, CachedResult>,
@@ -34,19 +33,7 @@ impl RetroVisCache {
             .clone()
     }
 
-    pub fn get_context(
-        &self, 
-        asset: &str, 
-        timestamp: u32
-    ) -> Option<CachedResult> { 
-        self.evict_if_new_day();
-        let key = ContextCacheKey::new(asset, timestamp);
-
-        // Use .get() for a concurrent read
-        self.context_results
-            .get(&key)
-            .map(|r| r.value().clone()) // Access the value in the Ref and clone it
-    }
+    
 
     pub fn get_or_calculate_candle<F>(
         &self,
@@ -66,28 +53,6 @@ impl RetroVisCache {
             .clone()
     }
 
-    pub fn get_session_history(
-        &self,
-        asset: &str,
-        tf: &str,
-        current_ts: u32,
-        limit: usize,
-    ) -> Vec<CachedResult> {
-        let mut history = Vec::new();
-        let step: i64 = Self::timeframe_to_seconds(tf); 
-
-        for i in 0..limit {
-            let target_ts = current_ts as i64 - (i as i64 * step);
-            let key = CandleCacheKey::new(asset, tf, target_ts as u32);
-
-            if let Some(res) = self.candle_results.get(&key) {
-                history.push(res.clone());
-            }
-        }
-        history.reverse();
-        history
-    }
-
     fn evict_if_new_day(&self) {
         let today_start = chrono::Utc::now()
             .date_naive()
@@ -102,18 +67,6 @@ impl RetroVisCache {
             self.candle_results.retain(|k, _| k.timestamp >= today_start);
             self.context_results.retain(|k, _| k.timestamp >= today_start);
             println!("CACHE EVICT | new day, removed previous entries");
-        }
-    }
-
-    pub fn get_ai_analysis(&self, key: &CandleCacheKey) -> Option<String> {
-        self.candle_results.get(key).and_then(|entry| {
-            entry.ai_analysis.as_ref().map(|arc_str| (**arc_str).clone())
-        })
-    }
-
-    pub fn save_ai_analysis(&self, key: &CandleCacheKey, analysis: String) {
-        if let Some(mut entry) = self.candle_results.get_mut(key) {
-            entry.ai_analysis = Some(Arc::new(analysis));
         }
     }
 

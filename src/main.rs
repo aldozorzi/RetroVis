@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use chrono::NaiveTime;
 use dotenvy::dotenv;
-use std::env;
 use std::thread;
 
 mod models;
@@ -14,9 +13,7 @@ mod parser;
 mod engine;
 mod cache;
 mod stats;
-mod ai;
 
-mod http_client;
 mod service;
 mod handlers;
 mod chart_data;
@@ -24,10 +21,8 @@ mod visualize;
 
 
 use models::AppState;
-use crate::ai::AiProvider;
-use ai::GeminiBroker;
 use engine::SearchEngine;
-use handlers::{ai_analysis_handler, context_matches_handler, day_details_handler, search_handler};
+use handlers::{context_matches_handler, day_details_handler, search_handler};
 use visualize::visualize_handler;
 
 #[tokio::main]
@@ -63,17 +58,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let cache = Arc::new(cache::RetroVisCache::new());
-    let broker: Arc<dyn AiProvider> = Arc::new(GeminiBroker::new(env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY")));
-    let ai_service = Arc::new(models::AiAnalysisService::new(
-        broker.clone(),
-        cache.clone()
-    ));
 
     let shared_state = Arc::new(AppState {
         engines,
         sessions,
         cache,
-        ai_service: ai_service,
     });
 
     let app = Router::new()
@@ -81,7 +70,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/day-details", get(day_details_handler))
         .route("/visualize", get(visualize_handler))
         .route("/context-search", post(context_matches_handler))
-        .route("/get-ai-analysis", post(ai_analysis_handler))
         .with_state(shared_state);
     println!("Server listening at http://127.0.0.1:9999");
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 9999));

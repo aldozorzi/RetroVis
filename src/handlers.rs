@@ -1,19 +1,16 @@
 use axum::{
     extract::{State, Query},
     Json,
-    response::IntoResponse,
 };
 use std::sync::Arc;
 use std::collections::HashMap;
-use serde_json::json;
 
 use crate::models::{
-    AppState, AiAnalysisRequest, CandleCacheKey, ContextQueryRequest, MatchesResponse,
+    AppState, ContextQueryRequest, MatchesResponse,
     QueryRequest, RawCandle,
 };
 use crate::service::{
-    build_ai_payload, compute_candle_history, compute_context, fetch_or_compute_context,
-    fetch_or_compute_history,
+    compute_candle_history, compute_context, 
 };
 
 pub async fn search_handler(
@@ -39,25 +36,6 @@ pub async fn context_matches_handler(
         req.top_k,
     );
     Json(MatchesResponse::from(result))
-}
-
-pub async fn ai_analysis_handler(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<AiAnalysisRequest>,
-) -> impl IntoResponse {
-    let key = CandleCacheKey::new(&req.symbol, &req.timeframe, req.timestamp);
-
-    let history = fetch_or_compute_history(&state, &req);
-    let context = fetch_or_compute_context(&state, &req);
-    let ai_data = build_ai_payload(&req, &history, &context);
-
-    match state.ai_service.get_analysis(key, ai_data).await {
-        Ok(analysis) => Json(json!({ "status": "success", "analysis": analysis })),
-        Err(e) => {
-            eprintln!("AI analysis error: {}", e);
-            Json(json!({ "status": "error", "message": format!("Analysis error: {}", e) }))
-        }
-    }
 }
 
 pub async fn day_details_handler(
