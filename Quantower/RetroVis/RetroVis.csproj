@@ -26,4 +26,9 @@
   <ItemGroup>
     <PackageReference Include="System.Windows.Extensions" Version="8.0.0" />
   </ItemGroup>
+  <ItemGroup>
+    <Folder Include="Models\" />
+    <Folder Include="Rendering\" />
+    <Folder Include="Services\" />
+  </ItemGroup>
 </Project>
