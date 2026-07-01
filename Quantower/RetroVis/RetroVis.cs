@@ -94,6 +94,13 @@ public class RetroVis : Indicator
     private string _currentAnalysisText;
 
     private int _analysisIndex;
+
+    // Blinking circle state
+    private bool _isBlinking;
+    private DateTime _blinkStartTime;
+    private bool _blinkEdgePositive;
+    private static readonly TimeSpan BlinkDuration = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan BlinkInterval = TimeSpan.FromMilliseconds(300);
     #endregion
 
     public RetroVis() : base()
@@ -215,6 +222,14 @@ public class RetroVis : Indicator
         _candlesResults = fullData.Matches;
         _candlesSummary = fullData.Summary;
         _nextCandle = fullData.NextCandle;
+
+        // Trigger blinking circle when both confidences >= 70%
+        if (_candlesSummary.Confidence >= 70f && _nextCandle.Confidence >= 70f)
+        {
+            _isBlinking = true;
+            _blinkStartTime = DateTime.UtcNow;
+            _blinkEdgePositive = _candlesSummary.AvgUp > Math.Abs(_candlesSummary.AvgDown);
+        }
     }
 
     private ContextQueryRequest BuildContextQueryRequest()
@@ -329,6 +344,25 @@ public class RetroVis : Indicator
 
     private void DrawResultsPanelOnChart(Graphics gr)
     {
+        // Draw blinking circle in top-left corner of chart
+        if (_isBlinking)
+        {
+            var elapsed = DateTime.UtcNow - _blinkStartTime;
+            if (elapsed < BlinkDuration)
+            {
+                bool visible = (int)(elapsed.TotalMilliseconds / BlinkInterval.TotalMilliseconds) % 2 == 0;
+                if (visible)
+                {
+                    var chartRect = this.CurrentChart.MainWindow.ClientRectangle;
+                    _panelRenderer.DrawBlinkingCircle(gr, chartRect, _blinkEdgePositive);
+                }
+            }
+            else
+            {
+                _isBlinking = false;
+            }
+        }
+
         var state = new PanelState(
             EffectiveSession: _effectiveSession,
             CurrentCandleCount: _currentCandleCount,

@@ -196,6 +196,25 @@ public class PanelRenderer
         return Brushes.White;
     }
 
+    public void DrawBlinkingCircle(Graphics gr, Rectangle chartRect, bool edgePositive)
+    {
+        int circleSize = 24;
+        int margin = 15;
+        int x = chartRect.X + chartRect.Width - circleSize - margin;
+        int y = chartRect.Y + margin;
+
+        Color fillColor = edgePositive ? Color.FromArgb(200, 0, 200, 0) : Color.FromArgb(200, 200, 0, 0);
+        Color borderColor = edgePositive ? Color.LimeGreen : Color.Red;
+
+        using var fillBrush = new SolidBrush(fillColor);
+        using var borderPen = new Pen(borderColor, 2.5f);
+
+        gr.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        gr.FillEllipse(fillBrush, x, y, circleSize, circleSize);
+        gr.DrawEllipse(borderPen, x, y, circleSize, circleSize);
+        gr.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.Default;
+    }
+
     public void DrawLevels(
         Graphics gr,
         IChartWindow mainWindow,
