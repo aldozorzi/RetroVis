@@ -15,32 +15,43 @@ namespace Ldazrz.RetroVis;
 public class RetroVis : Indicator
 {
     #region Parameters
-    [InputParameter("Session Type", 0, variants: ["AUTO", "AUTO", "NY_OPEN", "NY_OPEN", "LONDON_OPEN", "LONDON_OPEN"])]
+    [InputParameter("Account", 10)]
+    public Account SelectedAccount;
+
+    [InputParameter("Session Type", 20, variants: ["AUTO", "AUTO", "NY_OPEN", "NY_OPEN", "LONDON_OPEN", "LONDON_OPEN"])]
     public string SessionId = "AUTO";
 
-    [InputParameter("Min Candles for Pattern", 1, 1, 15, 1)]
+    [InputParameter("Min Candles for Pattern", 30, 1, 15, 1)]
     public int MinCandles = 1;
 
-    [InputParameter("Max Candles for Pattern", 2, 1, 20, 1)]
+    [InputParameter("Max Candles for Pattern", 40, 1, 20, 1)]
     public int MaxCandles = 6;
 
-    [InputParameter("Webserver URL", 3)]
+    [InputParameter("Webserver URL", 50)]
     public string ServerUrl = "http://127.0.0.1:9999";
 
-    [InputParameter("Draw Session Levels", 5)]
+    [InputParameter("Draw Session Levels", 60)]
     public bool DrawSessionLevels { get; set; } = true;
 
-    [InputParameter("Draw Next Candle Levels", 6)]
+    [InputParameter("Draw Next Candle Levels", 70)]
     public bool DrawNextCandleLevels { get; set; } = true;
 
-    [InputParameter("Enable Candle Close Alert", 7)]
+    [InputParameter("Enable Candle Close Alert", 80)]
     public bool EnableCloseAlert { get; set; } = true;
 
-    [InputParameter("Alert Seconds Before Close", 8, 1, 60, 1)]
+    [InputParameter("Alert Seconds Before Close", 90, 1, 60, 1)]
     public int AlertSecondsBeforeClose = 10;
 
-    [InputParameter("Alert Sound File (.wav)", 9)]
+    [InputParameter("Alert Sound File (.wav)", 100)]
     public string AlertSoundPath = @"C:\Risorse\suoni\ding.wav";
+
+    [InputParameter("Risk Amount ($)", 110)]
+    public double RiskAmount = 100;
+
+    
+
+    [InputParameter("Order TP Source", 12, variants: ["Next Candle Levels", "NextCandle", "Session Levels", "Session"])]
+    public string OrderTpSource = "NextCandle";
     #endregion
 
     #region Internal Fields
@@ -63,6 +74,7 @@ public class RetroVis : Indicator
 
     private CloseAlertService _alertService;
     private ChartInputHandler _inputHandler;
+    private readonly OrderService _orderService = new();
 
     private static TimeZoneInfo _nyTz;
     private static TimeZoneInfo _londonTz;
@@ -120,6 +132,8 @@ public class RetroVis : Indicator
         }
 
         this.InitTicker();
+
+        
     }
 
     protected void ResetLists()
@@ -250,6 +264,8 @@ public class RetroVis : Indicator
             {
                 this.DrawLevelsOnChart(gr);
                 this.DrawResultsPanelOnChart(gr);
+                if (this.SelectedAccount != null)
+                    _panelRenderer.DrawOrderButtons(gr, this.GetLongButtonRect(), this.GetShortButtonRect());
             }
         }
         catch (Exception ex)
@@ -268,22 +284,48 @@ public class RetroVis : Indicator
         int drawBarIndex = Math.Clamp(_openBarIndex, 0, this.Count - 1);
         DateTime sessionStartTime = this.Time(drawBarIndex);
 
-        int baseCandleIndex = _analysisIndex + 1;
-        if (this.MaxCandles > 0 && (_openBarIndex - baseCandleIndex) >= this.MaxCandles)
-            baseCandleIndex = _openBarIndex - this.MaxCandles + 1;
-        baseCandleIndex = Math.Clamp(baseCandleIndex, 0, this.Count - 1);
-
-        double nextCandleClose = this.Close(baseCandleIndex);
+        var (nextCandleUp, nextCandleDown) = this.GetNextCandleLevels();
 
         _panelRenderer.DrawLevels(
             gr, mainWindow,
             sessionStartTime, sessionStartTime,
             sessionUp: _currentPriceBase + _candlesSummary.AvgUp,
             sessionDown: _currentPriceBase - _candlesSummary.AvgDown,
-            nextCandleUp: nextCandleClose + _nextCandle.AvgUp,
-            nextCandleDown: nextCandleClose - _nextCandle.AvgDown,
+            nextCandleUp: nextCandleUp,
+            nextCandleDown: nextCandleDown,
             this.DrawSessionLevels, this.DrawNextCandleLevels);
     }
+
+    /// <summary>
+    /// Same next-candle level calculation used both for drawing the dashed
+    /// lines and for determining the TP target when placing an order, so
+    /// the two always agree on what "the TP level" means.
+    /// </summary>
+    private (double Up, double Down) GetNextCandleLevels()
+    {
+        int baseCandleIndex = _analysisIndex + 1;
+        if (this.MaxCandles > 0 && (_openBarIndex - baseCandleIndex) >= this.MaxCandles)
+            baseCandleIndex = _openBarIndex - this.MaxCandles + 1;
+        baseCandleIndex = Math.Clamp(baseCandleIndex, 0, Math.Max(0, this.Count - 1));
+
+        double nextCandleClose = this.Close(baseCandleIndex);
+        return (nextCandleClose + _nextCandle.AvgUp, nextCandleClose - _nextCandle.AvgDown);
+    }
+
+    /// <summary>
+    /// Same session-level calculation used for drawing the solid lines.
+    /// </summary>
+    private (double Up, double Down) GetSessionLevels() =>
+        (_currentPriceBase + _candlesSummary.AvgUp, _currentPriceBase - _candlesSummary.AvgDown);
+
+    /// <summary>
+    /// Picks which level pair feeds the order TP/sizing, per OrderTpSource.
+    /// </summary>
+    private (double Up, double Down) GetOrderTpLevels() =>
+        this.OrderTpSource == "Session" ? this.GetSessionLevels() : this.GetNextCandleLevels();
+
+    private Rectangle GetLongButtonRect() => new(_toggleRect.X, _toggleRect.Y + 35 + _lastPanelHeight + 10, 160, 30);
+    private Rectangle GetShortButtonRect() => new(_toggleRect.X + 170, _toggleRect.Y + 35 + _lastPanelHeight + 10, 160, 30);
 
     private void DrawResultsPanelOnChart(Graphics gr)
     {
@@ -309,13 +351,17 @@ public class RetroVis : Indicator
 
     private void OnChartMouseDown(object sender, ChartMouseNativeEventArgs e)
     {
-        _inputHandler.OnMouseDown();
+        _inputHandler.OnMouseDown(e);
     }
 
     private void OnChartMouseUp(object sender, ChartMouseNativeEventArgs e)
     {
+        Rectangle longRect = this.SelectedAccount != null ? this.GetLongButtonRect() : Rectangle.Empty;
+        Rectangle shortRect = this.SelectedAccount != null ? this.GetShortButtonRect() : Rectangle.Empty;
+
         var result = _inputHandler.OnMouseUp(
-            e, _toggleRect, _backtestBtnRect, _isPanelVisible, _isBacktestMode,
+            e, _toggleRect, _backtestBtnRect, longRect, shortRect,
+            _isPanelVisible, _isBacktestMode,
             _matchAreas, _contextAreas, _ticker, this.GetFormattedTimeframe());
 
         switch (result.Action)
@@ -330,7 +376,22 @@ public class RetroVis : Indicator
             case InputAction.RunManualAnalysis:
                 this.RunManualAnalysis(result.CandleIndex);
                 break;
+            case InputAction.PlaceLong:
+                this.PlaceOrder(Side.Buy);
+                break;
+            case InputAction.PlaceShort:
+                this.PlaceOrder(Side.Sell);
+                break;
         }
+    }
+
+    private void PlaceOrder(Side side)
+    {
+        var (levelUp, levelDown) = this.GetOrderTpLevels();
+        double entryPrice = this.Symbol.Last;
+        double tpPrice = side == Side.Buy ? levelUp : levelDown;
+
+        _orderService.PlaceMarketOrder(side, this.Symbol, this.SelectedAccount, entryPrice, tpPrice, this.RiskAmount);
     }
 
     protected void RunManualAnalysis(int candleIndex)

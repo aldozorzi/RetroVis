@@ -55,6 +55,19 @@ public class PanelRenderer
         gr.DrawString(btLabel, _btnFont, Brushes.White, backtestBtnRect.X + (float)Math.Round((backtestBtnRect.Width - labelWidth) / 2), backtestBtnRect.Y + 7);
     }
 
+    public void DrawOrderButtons(Graphics gr, Rectangle longRect, Rectangle shortRect)
+    {
+        gr.FillRectangle(Brushes.LimeGreen, longRect);
+        string longLabel = "BUY";
+        float longWidth = gr.MeasureString(longLabel, _btnFont).Width;
+        gr.DrawString(longLabel, _btnFont, Brushes.Black, longRect.X + (float)Math.Round((longRect.Width - longWidth) / 2), longRect.Y + 10);
+
+        gr.FillRectangle(Brushes.Crimson, shortRect);
+        string shortLabel = "SELL";
+        float shortWidth = gr.MeasureString(shortLabel, _btnFont).Width;
+        gr.DrawString(shortLabel, _btnFont, Brushes.White, shortRect.X + (float)Math.Round((shortRect.Width - shortWidth) / 2), shortRect.Y + 10);
+    }
+
     public PanelDrawResult DrawResultsPanel(Graphics gr, Point origin, int panelWidth, int lastPanelHeight, in PanelState state)
     {
         var matchAreas = new List<MatchClickArea>();

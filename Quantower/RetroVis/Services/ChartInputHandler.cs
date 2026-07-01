@@ -8,7 +8,7 @@ using Ldazrz.RetroVis.Rendering;
 
 namespace Ldazrz.RetroVis.Services;
 
-public enum InputAction { None, TogglePanel, ToggleBacktest, RunManualAnalysis }
+public enum InputAction { None, TogglePanel, ToggleBacktest, RunManualAnalysis, PlaceLong, PlaceShort }
 
 public readonly record struct InputResult(InputAction Action, int CandleIndex = -1);
 
@@ -22,20 +22,29 @@ public readonly record struct InputResult(InputAction Action, int CandleIndex = 
 [SupportedOSPlatform("windows")]
 public class ChartInputHandler
 {
+    private const int DragThresholdPixels = 6;
+
     private readonly HistoricalData _data;
     private bool _mouseDownReceived;
+    private Point _mouseDownLocation;
 
     public ChartInputHandler(HistoricalData data)
     {
         _data = data;
     }
 
-    public void OnMouseDown() => _mouseDownReceived = true;
+    public void OnMouseDown(ChartMouseNativeEventArgs e)
+    {
+        _mouseDownReceived = true;
+        _mouseDownLocation = e.Location;
+    }
 
     public InputResult OnMouseUp(
         ChartMouseNativeEventArgs e,
         Rectangle toggleRect,
         Rectangle backtestBtnRect,
+        Rectangle longBtnRect,
+        Rectangle shortBtnRect,
         bool isPanelVisible,
         bool isBacktestMode,
         IReadOnlyList<MatchClickArea> matchAreas,
@@ -46,6 +55,12 @@ public class ChartInputHandler
         if (!_mouseDownReceived) return new InputResult(InputAction.None);
         _mouseDownReceived = false;
 
+        // Manhattan distance to avoid drags and isolate clicks.
+        int dx = Math.Abs(e.Location.X - _mouseDownLocation.X);
+        int dy = Math.Abs(e.Location.Y - _mouseDownLocation.Y);
+        if (dx + dy > DragThresholdPixels)
+            return new InputResult(InputAction.None);
+
         if (toggleRect.Contains(e.Location))
             return new InputResult(InputAction.TogglePanel);
 
@@ -54,6 +69,12 @@ public class ChartInputHandler
 
         if (isPanelVisible)
         {
+            if (longBtnRect.Contains(e.Location))
+                return new InputResult(InputAction.PlaceLong);
+
+            if (shortBtnRect.Contains(e.Location))
+                return new InputResult(InputAction.PlaceShort);
+
             string clickedDate = FindClickedDate(matchAreas, e.Location) ?? FindClickedDate(contextAreas, e.Location);
             if (clickedDate != null)
             {
