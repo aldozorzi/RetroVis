@@ -48,7 +48,7 @@ public class RetroVis : Indicator
     [InputParameter("Risk Amount ($)", 110)]
     public double RiskAmount = 100;
 
-    
+
 
     [InputParameter("Order TP Source", 12, variants: ["Next Candle Levels", "NextCandle", "Session Levels", "Session"])]
     public string OrderTpSource = "NextCandle";
@@ -140,7 +140,7 @@ public class RetroVis : Indicator
 
         this.InitTicker();
 
-        
+
     }
 
     protected void ResetLists()
@@ -224,7 +224,10 @@ public class RetroVis : Indicator
         _nextCandle = fullData.NextCandle;
 
         // Trigger blinking circle when both confidences >= 70%
-        if (_candlesSummary.Confidence >= 70f && _nextCandle.Confidence >= 70f)
+
+        var sessionUp = _candlesSummary.AvgUp > _candlesSummary.AvgDown;
+        var candleUp = _nextCandle.AvgUp > _nextCandle.AvgDown;
+        if (_candlesSummary.Confidence >= 70f && _nextCandle.Confidence >= 70f && sessionUp == candleUp)
         {
             _isBlinking = true;
             _blinkStartTime = DateTime.UtcNow;
@@ -298,14 +301,14 @@ public class RetroVis : Indicator
         var mainWindow = this.CurrentChart.MainWindow;
         int drawBarIndex = Math.Clamp(_openBarIndex, 0, this.Count - 1);
         DateTime sessionStartTime = this.Time(drawBarIndex);
-
+        var (sessionUp, sessionDown) = this.GetSessionLevels();
         var (nextCandleUp, nextCandleDown) = this.GetNextCandleLevels();
 
         _panelRenderer.DrawLevels(
             gr, mainWindow,
             sessionStartTime, sessionStartTime,
-            sessionUp: _currentPriceBase + _candlesSummary.AvgUp,
-            sessionDown: _currentPriceBase - _candlesSummary.AvgDown,
+            sessionUp: sessionUp,
+            sessionDown: sessionDown,
             nextCandleUp: nextCandleUp,
             nextCandleDown: nextCandleDown,
             this.DrawSessionLevels, this.DrawNextCandleLevels);
@@ -330,8 +333,16 @@ public class RetroVis : Indicator
     /// <summary>
     /// Same session-level calculation used for drawing the solid lines.
     /// </summary>
-    private (double Up, double Down) GetSessionLevels() =>
-        (_currentPriceBase + _candlesSummary.AvgUp, _currentPriceBase - _candlesSummary.AvgDown);
+    private (double Up, double Down) GetSessionLevels()
+        {
+            int baseCandleIndex = _analysisIndex + 1;
+            if (this.MaxCandles > 0 && (_openBarIndex - baseCandleIndex) >= this.MaxCandles)
+                baseCandleIndex = _openBarIndex - this.MaxCandles + 1;
+                baseCandleIndex = Math.Clamp(baseCandleIndex, 0, Math.Max(0, this.Count - 1));
+
+            double _currentPriceBase = this.Close(baseCandleIndex);
+            return (_currentPriceBase + _candlesSummary.AvgUp, _currentPriceBase - _candlesSummary.AvgDown);
+    }
 
     /// <summary>
     /// Picks which level pair feeds the order TP/sizing, per OrderTpSource.

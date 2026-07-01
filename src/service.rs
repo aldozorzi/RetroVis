@@ -21,6 +21,7 @@ pub fn compute_candle_history(
     (1..=candles.len()).map(|i| {
         let slice      = &candles[0..i];
         let current_ts = timestamp as i64 - ((candles.len() - i) as i64 * timeframe_seconds);
+        let last_close = slice.last().map(|c| c.close).unwrap_or(session_open);
 
         state.cache.get_or_calculate_candle(
             symbol, timeframe,
@@ -32,7 +33,7 @@ pub fn compute_candle_history(
                 let matches = engine.find_matches(
                     &normalized, top_k.min(10), session, (timeframe_seconds / 60) as u32
                 );
-                let (summary, custom_matches) = calculate_aggregates(&matches, session_open);
+                let (summary, custom_matches) = calculate_aggregates(&matches, session_open, last_close);
                 CachedResult::from_aggregates(summary, custom_matches)
             }
         )
@@ -59,19 +60,21 @@ pub fn compute_context(
             session_open, prev_close, prev_high, prev_low, intraday_high, intraday_low,
         );
         let matches = engine.find_context_matches(&ctx, top_k.min(10), session, timestamp);
-        let (summary, custom_matches) = calculate_aggregates(&matches, session_open);
+        let (summary, custom_matches) = calculate_aggregates(&matches, session_open, session_open);
         CachedResult::from_aggregates(summary, custom_matches)
     })
 }
 
-pub fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (AggregateData, Vec<MatchResponse>) {
+pub fn calculate_aggregates(matches: &[MatchOutcome], session_open: f32, last_close: f32) -> (AggregateData, Vec<MatchResponse>) {
+    // Session metrics are calculated from session_open baseline
+    // Next candle metrics are calculated from last_close baseline
     let response_matches: Vec<MatchResponse> = matches.iter().map(|m| {
-        let up = (m.mfe_pct / 100.0) * current_price;
-        let down = (m.mae_pct / 100.0) * current_price;
-        let eos = (m.eod_ret_pct / 100.0) * current_price;
-        let eoh_pts = (m.eoh_pct / 100.0) * current_price;
-        let next_up_pts = (m.next_candle_up_pct.unwrap_or(0.0) / 100.0) * current_price;
-        let next_down_pts = (m.next_candle_down_pct.unwrap_or(0.0) / 100.0) * current_price;
+        let up = (m.mfe_pct / 100.0) * session_open;
+        let down = (m.mae_pct / 100.0) * session_open;
+        let eos = (m.eod_ret_pct / 100.0) * session_open;
+        let eoh_pts = (m.eoh_pct / 100.0) * session_open;
+        let next_up_pts = (m.next_candle_up_pct.unwrap_or(0.0) / 100.0) * last_close;
+        let next_down_pts = (m.next_candle_down_pct.unwrap_or(0.0) / 100.0) * last_close;
 
         MatchResponse {
             timestamp: m.timestamp,
@@ -93,13 +96,25 @@ pub fn calculate_aggregates(matches: &[MatchOutcome], current_price: f32) -> (Ag
 
     let proj = weighted_projection(&up_mags, &down_mags, &similarities);
 
+    // Adjust session averages to be relative to last_close instead of session_open
+    let price_offset = last_close - session_open;
+    let adjusted_avg_up = proj.avg_up - price_offset;
+    let adjusted_avg_down = proj.avg_down + price_offset;
+
+    // Recalculate edge_ratio based on adjusted values
+    let adjusted_edge_ratio = {
+        let long_edge = adjusted_avg_up / (if adjusted_avg_down == 0.0 { 1.0 } else { adjusted_avg_down });
+        let short_edge = adjusted_avg_down / (if adjusted_avg_up == 0.0 { 1.0 } else { adjusted_avg_up });
+        long_edge.max(short_edge)
+    };
+
     (
         AggregateData {
-            avg_up: proj.avg_up,
-            avg_down: proj.avg_down,
+            avg_up: adjusted_avg_up,
+            avg_down: adjusted_avg_down,
             avg_eos: median(&mut eos_values),
             avg_eoh: median(&mut eoh_values),
-            edge_ratio: proj.edge_ratio,
+            edge_ratio: adjusted_edge_ratio,
             bias_pct: proj.bias_pct,
             confidence: (proj.confidence * 100.0).round() as u8,
         },
