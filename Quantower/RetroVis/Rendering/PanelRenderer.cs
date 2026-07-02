@@ -19,7 +19,10 @@ public readonly record struct PanelState(
     IReadOnlyList<MatchResponse> CandlesResults,
     AggregateData ContextSummary,
     IReadOnlyList<MatchResponse> ContextResults,
-    bool IsLoadingNewAnalysis
+    bool IsLoadingNewAnalysis,
+    double PositionSizeLong,
+    double PositionSizeShort,
+    bool HasValidPositionSize
 );
 
 public readonly record struct PanelDrawResult(
@@ -78,9 +81,16 @@ public class PanelRenderer
 
         int tx = panelRect.X + 12, ty = panelRect.Y + 12;
 
-        string deltaSign = state.CurrentDelta >= 0 ? "+" : "";
-        string deltaText = $" NOW: {deltaSign}{state.CurrentDelta:F1}";
-        Brush deltaBrush = state.CurrentDelta >= 0 ? Brushes.LimeGreen : Brushes.Red;
+        // Show only the position size that matches the next candle edge bias
+        string positionText = "";
+        if (state.HasValidPositionSize && state.CandlesResults.Count > 0)
+        {
+            bool isLongBias = state.NextCandle.AvgUp > Math.Abs(state.NextCandle.AvgDown);
+            positionText = isLongBias 
+                ? $" SIZE: L:{state.PositionSizeLong:F0}"
+                : $" SIZE: S:{state.PositionSizeShort:F0}";
+        }
+        Brush positionBrush = Brushes.Orange;
 
         string dynamicTitle;
         if (state.EffectiveSession != null)
@@ -99,8 +109,8 @@ public class PanelRenderer
 
         gr.DrawString(dynamicTitle, _headerFont, Brushes.Orange, tx, ty);
         float titleWidth = gr.MeasureString(dynamicTitle, _headerFont).Width;
-        if (state.CandlesResults.Count > 0)
-            gr.DrawString(deltaText, _headerFont, deltaBrush, 30 + titleWidth, ty);
+        if (state.CandlesResults.Count > 0 && state.HasValidPositionSize)
+            gr.DrawString(positionText, _headerFont, positionBrush, tx + titleWidth + 10, ty);
 
         ty += 32;
         gr.DrawString("CANDLE MATCHES", _headerFont, Brushes.Orange, tx, ty);
@@ -191,7 +201,7 @@ public class PanelRenderer
     {
         if (/*edgeRatio > 2.0 && */Math.Abs(confidence) >= 70)
             return avgUp > Math.Abs(avgDown) ? Brushes.LimeGreen : Brushes.Red;
-        if (/*edgeRatio > 1.2*/Math.Abs(confidence) >= 50)
+        if (/*edgeRatio > 1.2*/Math.Abs(confidence) >= 60)
             return Brushes.Gold;
         return Brushes.White;
     }

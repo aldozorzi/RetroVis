@@ -374,6 +374,22 @@ public class RetroVis : Indicator
             }
         }
 
+        // Calculate position sizes for display
+        double currentPrice = this.Symbol.Last;
+        var (levelUp, levelDown) = this.GetOrderTpLevels();
+        
+        double longQty = 0, shortQty = 0;
+        if (this.Symbol != null && _currentCandleCount >= this.MinCandles)
+        {
+            var longResult = PositionSizer.CalculatePositionSize(
+                this.Symbol, currentPrice, levelUp, this.RiskAmount);
+            longQty = longResult.IsValid ? longResult.Quantity : 0;
+
+            var shortResult = PositionSizer.CalculatePositionSize(
+                this.Symbol, currentPrice, levelDown, this.RiskAmount);
+            shortQty = shortResult.IsValid ? shortResult.Quantity : 0;
+        }
+
         var state = new PanelState(
             EffectiveSession: _effectiveSession,
             CurrentCandleCount: _currentCandleCount,
@@ -384,7 +400,10 @@ public class RetroVis : Indicator
             CandlesResults: _candlesResults,
             ContextSummary: _contextSummary,
             ContextResults: _contextResults,
-            IsLoadingNewAnalysis: _currentAnalysisText == "Loading new Analysis...");
+            IsLoadingNewAnalysis: _currentAnalysisText == "Loading new Analysis...",
+            PositionSizeLong: longQty,
+            PositionSizeShort: shortQty,
+            HasValidPositionSize: longQty > 0 || shortQty > 0);
 
         Point origin = new(_toggleRect.X, _toggleRect.Y + 35);
         var result = _panelRenderer.DrawResultsPanel(gr, origin, 330, _lastPanelHeight, state);

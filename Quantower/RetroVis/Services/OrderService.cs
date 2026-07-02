@@ -4,44 +4,28 @@ using TradingPlatform.BusinessLayer;
 namespace Ldazrz.RetroVis.Services;
 
 /// <summary>
-/// Computes position size from a fixed dollar risk and places a market
-/// order with automatic SL/TP. Sizing logic: risk is applied to half the
-/// distance to TP, so a full TP hit nets ~2x the risk amount (RR ~1:2).
-/// Quantity is floored, but never below 1 (intended for micro contracts).
+/// Places market orders with automatic SL/TP using shared position sizing logic.
 /// </summary>
 public class OrderService
 {
     public void PlaceMarketOrder(Side side, Symbol symbol, Account account, double entryPrice, double tpPrice, double riskAmount)
     {
-        if (symbol == null || account == null)
+        if (account == null)
         {
-            RetroVisLog.Error("OrderService: Symbol o Account non selezionato, ordine non piazzato.");
+            RetroVisLog.Error("OrderService: Account not selected, order not placed.");
             return;
         }
 
-        double distancePoints = Math.Abs(tpPrice - entryPrice);
-        if (distancePoints <= 0)
+        var calc = PositionSizer.CalculatePositionSize(symbol, entryPrice, tpPrice, riskAmount);
+        if (!calc.IsValid)
         {
-            RetroVisLog.Error("OrderService: distanza dal TP non valida (<=0), ordine non piazzato.");
+            RetroVisLog.Error($"OrderService: {calc.ErrorMessage}");
             return;
         }
 
-        double sizingDistance = distancePoints / 2.0;
-
-        double slTicks = symbol.CalculateTicks(entryPrice, entryPrice + sizingDistance);
-        double tpTicks = symbol.CalculateTicks(entryPrice, entryPrice + distancePoints);
-        slTicks = Math.Abs(slTicks);
-        tpTicks = Math.Abs(tpTicks);
-
-        double tickCost = symbol.GetTickCost(entryPrice);
-        if (slTicks <= 0 || tickCost <= 0)
-        {
-            RetroVisLog.Error($"OrderService: dati tick non validi (slTicks={slTicks}, tickCost={tickCost}), ordine non piazzato.");
-            return;
-        }
-
-        double rawQuantity = riskAmount / (slTicks * tickCost);
-        double quantity = Math.Max(1, Math.Floor(rawQuantity));
+        double quantity = calc.Quantity;
+        double slTicks = calc.SlTicks;
+        double tpTicks = calc.TpTicks;
 
         var request = new PlaceOrderRequestParameters
         {
@@ -54,7 +38,7 @@ public class OrderService
             TakeProfit = SlTpHolder.CreateTP(tpTicks, PriceMeasurement.Offset)
         };
 
-        RetroVisLog.Info($"OrderService: piazzo {side} {quantity} {symbol.Name} @ ~{entryPrice} (SL {slTicks} ticks, TP {tpTicks} ticks, risk ${riskAmount})");
+        RetroVisLog.Info($"OrderService: placing {side} {quantity} {symbol.Name} @ ~{entryPrice:F2} (SL {slTicks:F1} ticks, TP {tpTicks:F1} ticks, risk ${riskAmount})");
         Core.Instance.PlaceOrder(request);
     }
 }
