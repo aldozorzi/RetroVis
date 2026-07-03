@@ -16,7 +16,7 @@ public class OrderService
             return;
         }
 
-        var calc = PositionSizer.CalculatePositionSize(symbol, entryPrice, tpPrice, riskAmount);
+        var calc = PositionSizer.CalculateSize(symbol, entryPrice, tpPrice, riskAmount);
         if (!calc.IsValid)
         {
             RetroVisLog.Error($"OrderService: {calc.ErrorMessage}");

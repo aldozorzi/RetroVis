@@ -22,7 +22,7 @@ public static class PositionSizer
     /// Calculates position size for a given entry, TP level, and risk amount.
     /// Returns SizeCalculation with IsValid=false if inputs are invalid.
     /// </summary>
-    public static SizeCalculation CalculatePositionSize(
+    public static SizeCalculation CalculateSize(
         Symbol symbol,
         double entryPrice,
         double tpPrice,

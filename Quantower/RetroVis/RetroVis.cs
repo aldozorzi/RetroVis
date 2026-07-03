@@ -48,9 +48,12 @@ public class RetroVis : Indicator
     [InputParameter("Risk Amount ($)", 110)]
     public double RiskAmount = 100;
 
+    [InputParameter("Enable Auto Orders", 115)]
+    public bool EnableAutoOrders { get; set; } = false;
 
 
-    [InputParameter("Order TP Source", 12, variants: ["Next Candle Levels", "NextCandle", "Session Levels", "Session"])]
+
+    //[InputParameter("Order TP Source", 12, variants: ["Next Candle Levels", "NextCandle", "Session Levels", "Session"])]
     public string OrderTpSource = "NextCandle";
     #endregion
 
@@ -75,6 +78,8 @@ public class RetroVis : Indicator
     private CloseAlertService _alertService;
     private ChartInputHandler _inputHandler;
     private readonly OrderService _orderService = new();
+    private AutoOrderService _autoOrderService;
+    private bool _autoOrderPlaced = false;
 
     private static TimeZoneInfo _nyTz;
     private static TimeZoneInfo _londonTz;
@@ -126,6 +131,7 @@ public class RetroVis : Indicator
         _barReader = new SessionBarReader(this.HistoricalData, _nyTz, _londonTz);
         _alertService = new CloseAlertService(this.HistoricalData);
         _inputHandler = new ChartInputHandler(this.HistoricalData);
+        _autoOrderService = new AutoOrderService(_orderService, this.AlertSoundPath);
 
         _lastProcessedBarTime = DateTime.MinValue;
         _alertService.LoadSound(this.AlertSoundPath);
@@ -194,7 +200,17 @@ public class RetroVis : Indicator
                 return;
 
             _lastProcessedBarTime = currentBarTime;
-            this.ProcessAnalysis(0);
+            // Check for auto order conditions after new analysis
+            if (this.EnableAutoOrders && !_isBacktestMode && _candlesResults.Count > 0 && _nextCandle.Confidence > 0)
+            {
+                _autoOrderPlaced = _autoOrderService.TryPlaceAutoOrder(
+                    this.Symbol,
+                    this.SelectedAccount,
+                    this.RiskAmount,
+                    _candlesSummary,
+                    _nextCandle,
+                    this.GetNextCandleLevels());
+            }
         }
         catch (Exception ex)
         {
@@ -381,11 +397,11 @@ public class RetroVis : Indicator
         double longQty = 0, shortQty = 0;
         if (this.Symbol != null && _currentCandleCount >= this.MinCandles)
         {
-            var longResult = PositionSizer.CalculatePositionSize(
+            var longResult = PositionSizer.CalculateSize(
                 this.Symbol, currentPrice, levelUp, this.RiskAmount);
             longQty = longResult.IsValid ? longResult.Quantity : 0;
 
-            var shortResult = PositionSizer.CalculatePositionSize(
+            var shortResult = PositionSizer.CalculateSize(
                 this.Symbol, currentPrice, levelDown, this.RiskAmount);
             shortQty = shortResult.IsValid ? shortResult.Quantity : 0;
         }
@@ -517,6 +533,7 @@ public class RetroVis : Indicator
         this.CurrentChart.MouseDown -= this.OnChartMouseDown;
         _alertService?.Dispose();
         _apiClient?.Dispose();
+        _autoOrderService?.Dispose();
         GC.SuppressFinalize(this);
     }
 
