@@ -200,6 +200,7 @@ public class RetroVis : Indicator
                 return;
 
             _lastProcessedBarTime = currentBarTime;
+            this.ProcessAnalysis(0);
             // Check for auto order conditions after new analysis
             if (this.EnableAutoOrders && !_isBacktestMode && _candlesResults.Count > 0 && _nextCandle.Confidence > 0)
             {
