@@ -70,6 +70,7 @@ public class RetroVis : Indicator
     private int _openBarIndex = -1;
     private double _currentPriceBase = 0;
     private DateTime _lastProcessedBarTime;
+    private int _lastProcessedBarIndex = -1;  // Track the last processed bar index to detect genuine new candles
 
     private int _currentCandleCount = 0;
     private string _ticker = "";
@@ -101,9 +102,7 @@ public class RetroVis : Indicator
     private int _analysisIndex;
 
     // Blinking circle state
-    private bool _isBlinking;
-    private DateTime _blinkStartTime;
-    private bool _blinkEdgePositive;
+    private bool _alertEdgePositive;
     private static readonly TimeSpan BlinkDuration = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan BlinkInterval = TimeSpan.FromMilliseconds(300);
     #endregion
@@ -116,7 +115,7 @@ public class RetroVis : Indicator
 
     protected override void OnInit()
     {
-        _apiClient = new RetroVisApiClient(this.ServerUrl, TimeSpan.FromSeconds(60));
+        this._apiClient = new RetroVisApiClient(this.ServerUrl, TimeSpan.FromSeconds(60));
 
         try
         {
@@ -128,13 +127,14 @@ public class RetroVis : Indicator
             RetroVisLog.Error("CRITICAL: Timezone non trovata! " + ex.Message);
         }
 
-        _barReader = new SessionBarReader(this.HistoricalData, _nyTz, _londonTz);
-        _alertService = new CloseAlertService(this.HistoricalData);
-        _inputHandler = new ChartInputHandler(this.HistoricalData);
-        _autoOrderService = new AutoOrderService(_orderService, this.AlertSoundPath);
+        this._barReader = new SessionBarReader(this.HistoricalData, RetroVis._nyTz, RetroVis._londonTz);
+        this._alertService = new CloseAlertService(this.HistoricalData);
+        this._inputHandler = new ChartInputHandler(this.HistoricalData);
+        this._autoOrderService = new AutoOrderService(this._orderService, this.AlertSoundPath);
 
-        _lastProcessedBarTime = DateTime.MinValue;
-        _alertService.LoadSound(this.AlertSoundPath);
+        this._lastProcessedBarTime = DateTime.MinValue;
+        this._lastProcessedBarIndex = -1;  // Initialize bar index tracking
+        this._alertService.LoadSound(this.AlertSoundPath);
 
         if (this.CurrentChart != null)
         {
@@ -151,19 +151,20 @@ public class RetroVis : Indicator
 
     protected void ResetLists()
     {
-        _matchAreas.Clear();
-        _contextAreas.Clear();
+        this._matchAreas.Clear();
+        this._contextAreas.Clear();
     }
 
     protected void Reset()
     {
-        _lastProcessedBarTime = default;
-        _candlesResults.Clear();
-        _contextResults.Clear();
+        // Keep _lastProcessedBarIndex to track genuine new candles
+        this._lastProcessedBarTime = default;
+        this._candlesResults.Clear();
+        this._contextResults.Clear();
         this.ResetLists();
-        _currentCandleCount = 0;
-        _lastContextSessionDate = "";
-        _currentAnalysisText = "Loading new Analysis...";
+        this._currentCandleCount = 0;
+        this._lastContextSessionDate = "";
+        this._currentAnalysisText = "Loading new Analysis...";
     }
 
     protected override void OnSettingsUpdated()
@@ -171,12 +172,14 @@ public class RetroVis : Indicator
         try
         {
             base.OnSettingsUpdated();
-            _alertService?.LoadSound(this.AlertSoundPath);
+            this._alertService?.LoadSound(this.AlertSoundPath);
             this.Reset();
+            this._lastProcessedBarIndex = -1;  // Reset bar index tracking when settings change
         }
         catch (Exception ex)
         {
             RetroVisLog.Error($"OnSettingsUpdated error: {ex.Message}");
+            this._lastProcessedBarIndex = -1;  // Ensure bar index is reset even if there's an error
         }
     }
 
@@ -186,30 +189,45 @@ public class RetroVis : Indicator
     {
         try
         {
-            _alertService.CheckAndPlay(this.EnableCloseAlert, _isBacktestMode, this.AlertSecondsBeforeClose);
+            this._alertService.CheckAndPlay(this.EnableCloseAlert, this._isBacktestMode, this.AlertSecondsBeforeClose);
 
-            if (_isBacktestMode || !_isPanelVisible) return;
-            _currentDelta = this.Close(0) - _currentPriceBase;
+            if (this._isBacktestMode || !this._isPanelVisible) return;
+            this._currentDelta = this.Close(0) - this._currentPriceBase;
 
             DateTime currentBarTime = this.Time();
-            if (currentBarTime == _lastProcessedBarTime) return;
+            int currentBarIndex = this.Count - 1;  // Current bar index
 
-            this.Reset();
-
-            if (currentBarTime.ToUniversalTime() < DateTime.UtcNow.AddMinutes(-this.Aggregation.Period.Duration.TotalMinutes))
-                return;
-
-            _lastProcessedBarTime = currentBarTime;
-            this.ProcessAnalysis(0);
-            // Check for auto order conditions after new analysis
-            if (this.EnableAutoOrders && !_isBacktestMode && _candlesResults.Count > 0 && _nextCandle.Confidence > 0)
+            // Check if this is a genuine new candle (new index) or just a chart reload/change
+            // RetroVisLog.Info($"OnUpdate: CurrentBarIndex={currentBarIndex}, LastProcessedBarIndex={this._lastProcessedBarIndex}, CurrentBarTime={currentBarTime}, LastProcessedBarTime={this._lastProcessedBarTime}");
+            bool isNewCandle = currentBarIndex != this._lastProcessedBarIndex;
+            
+            // Always update time tracking
+            if (currentBarTime != this._lastProcessedBarTime)
             {
-                _autoOrderPlaced = _autoOrderService.TryPlaceAutoOrder(
+                this._lastProcessedBarTime = currentBarTime;
+            }
+            
+            // Only reset and process if this is a new candle
+            if (isNewCandle)
+            {
+                this.Reset();
+                this._lastProcessedBarIndex = currentBarIndex;
+                
+                if (currentBarTime.ToUniversalTime() < DateTime.UtcNow.AddMinutes(-this.Aggregation.Period.Duration.TotalMinutes))
+                    return;
+                    
+                this.ProcessAnalysis(0);
+            }
+            
+            // Check for auto order conditions ONLY on new candle formation, not on chart changes
+            if (this.EnableAutoOrders && !this._isBacktestMode && isNewCandle && this._candlesResults.Count > 0 && this._nextCandle.Confidence > 0)
+            {
+                this._autoOrderPlaced = this._autoOrderService.TryPlaceAutoOrder(
                     this.Symbol,
                     this.SelectedAccount,
                     this.RiskAmount,
-                    _candlesSummary,
-                    _nextCandle,
+                    this._candlesSummary,
+                    this._nextCandle,
                     this.GetNextCandleLevels());
             }
         }
@@ -221,35 +239,26 @@ public class RetroVis : Indicator
 
     private async Task FetchMatchesAsync(List<RawCandle> candles)
     {
-        var lastCandle = candles[candles.Count - 1];
+        var lastCandle = candles[^1];
         var request = new QueryRequest
         {
-            Symbol = _ticker,
-            SessionId = _effectiveSession,
+            Symbol = this._ticker,
+            SessionId = this._effectiveSession,
             Candles = candles,
             TopK = 5,
             Timestamp = (uint)lastCandle.Timestamp,
             Timeframe = this.GetFormattedTimeframe(),
-            SessionOpen = (float)_currentPriceBase
+            SessionOpen = (float)this._currentPriceBase
         };
 
-        var fullData = await _apiClient.FetchMatchesAsync(request);
+        var fullData = await this._apiClient.FetchMatchesAsync(request);
         if (fullData == null) return;
 
-        _candlesResults = fullData.Matches;
-        _candlesSummary = fullData.Summary;
-        _nextCandle = fullData.NextCandle;
+        this._candlesResults = fullData.Matches;
+        this._candlesSummary = fullData.Summary;
+        this._nextCandle = fullData.NextCandle;
 
-        // Trigger blinking circle when both confidences >= 70%
-
-        var sessionUp = _candlesSummary.AvgUp > _candlesSummary.AvgDown;
-        var candleUp = _nextCandle.AvgUp > _nextCandle.AvgDown;
-        if (_candlesSummary.Confidence >= 70f && _nextCandle.Confidence >= 70f && sessionUp == candleUp)
-        {
-            _isBlinking = true;
-            _blinkStartTime = DateTime.UtcNow;
-            _blinkEdgePositive = _candlesSummary.AvgUp > Math.Abs(_candlesSummary.AvgDown);
-        }
+        
     }
 
     private ContextQueryRequest BuildContextQueryRequest()
@@ -257,16 +266,16 @@ public class RetroVis : Indicator
         const int closeHour = 17;
         const int closeMinute = 0;
 
-        float sessionOpen = (float)this.Open(_openBarIndex);
-        var intraday = _barReader.ExtractIntradayRange(_openBarIndex, this.Count);
-        var prevDay = _barReader.ExtractPrevDayStats(_openBarIndex, this.Count, closeHour, closeMinute);
+        float sessionOpen = (float)this.Open(this._openBarIndex);
+        var intraday = this._barReader.ExtractIntradayRange(this._openBarIndex, this.Count);
+        var prevDay = this._barReader.ExtractPrevDayStats(this._openBarIndex, this.Count, closeHour, closeMinute);
 
-        uint openTimestamp = (uint)new DateTimeOffset(this.Time(_openBarIndex)).ToUnixTimeSeconds();
+        uint openTimestamp = (uint)new DateTimeOffset(this.Time(this._openBarIndex)).ToUnixTimeSeconds();
 
         return new ContextQueryRequest
         {
-            Symbol = _ticker,
-            SessionId = _effectiveSession,
+            Symbol = this._ticker,
+            SessionId = this._effectiveSession,
             SessionOpen = sessionOpen,
             PrevClose = prevDay.PrevClose,
             PrevHigh = prevDay.PrevHigh,
@@ -281,11 +290,11 @@ public class RetroVis : Indicator
     private async Task FetchContextMatchesAsync()
     {
         var request = this.BuildContextQueryRequest();
-        var fullData = await _apiClient.FetchContextMatchesAsync(request);
+        var fullData = await this._apiClient.FetchContextMatchesAsync(request);
         if (fullData == null) return;
 
-        _contextResults = fullData.Matches;
-        _contextSummary = fullData.Summary;
+        this._contextResults = fullData.Matches;
+        this._contextSummary = fullData.Summary;
     }
 
     public override void OnPaintChart(PaintChartEventArgs args)
@@ -293,14 +302,14 @@ public class RetroVis : Indicator
         try
         {
             Graphics gr = args.Graphics;
-            _panelRenderer.DrawToggleButtons(gr, _toggleRect, _backtestBtnRect, _isPanelVisible, _isBacktestMode);
+            this._panelRenderer.DrawToggleButtons(gr, this._toggleRect, this._backtestBtnRect, this._isPanelVisible, this._isBacktestMode);
 
-            if (_isPanelVisible)
+            if (this._isPanelVisible)
             {
                 this.DrawLevelsOnChart(gr);
                 this.DrawResultsPanelOnChart(gr);
                 if (this.SelectedAccount != null)
-                    _panelRenderer.DrawOrderButtons(gr, this.GetLongButtonRect(), this.GetShortButtonRect());
+                    this._panelRenderer.DrawOrderButtons(gr, this.GetLongButtonRect(), this.GetShortButtonRect());
             }
         }
         catch (Exception ex)
@@ -312,18 +321,18 @@ public class RetroVis : Indicator
     private void DrawLevelsOnChart(Graphics gr)
     {
         if (!this.DrawSessionLevels && !this.DrawNextCandleLevels) return;
-        if (_currentCandleCount < this.MinCandles) return;
+        if (this._currentCandleCount < this.MinCandles) return;
         if (this.Count <= 0) return;
 
         var mainWindow = this.CurrentChart.MainWindow;
-        int drawBarIndex = Math.Clamp(_openBarIndex, 0, this.Count - 1);
+        int drawBarIndex = Math.Clamp(this._openBarIndex, 0, this.Count - 1);
         DateTime sessionStartTime = this.Time(drawBarIndex);
         var (sessionUp, sessionDown) = this.GetSessionLevels();
         var (nextCandleUp, nextCandleDown) = this.GetNextCandleLevels();
 
-        _panelRenderer.DrawLevels(
+        PanelRenderer.DrawLevels(
             gr, mainWindow,
-            sessionStartTime, sessionStartTime,
+            sessionStartTime,
             sessionUp: sessionUp,
             sessionDown: sessionDown,
             nextCandleUp: nextCandleUp,
@@ -338,13 +347,13 @@ public class RetroVis : Indicator
     /// </summary>
     private (double Up, double Down) GetNextCandleLevels()
     {
-        int baseCandleIndex = _analysisIndex + 1;
-        if (this.MaxCandles > 0 && (_openBarIndex - baseCandleIndex) >= this.MaxCandles)
-            baseCandleIndex = _openBarIndex - this.MaxCandles + 1;
+        int baseCandleIndex = this._analysisIndex + 1;
+        if (this.MaxCandles > 0 && (this._openBarIndex - baseCandleIndex) >= this.MaxCandles)
+            baseCandleIndex = this._openBarIndex - this.MaxCandles + 1;
         baseCandleIndex = Math.Clamp(baseCandleIndex, 0, Math.Max(0, this.Count - 1));
 
         double nextCandleClose = this.Close(baseCandleIndex);
-        return (nextCandleClose + _nextCandle.AvgUp, nextCandleClose - _nextCandle.AvgDown);
+        return (nextCandleClose + this._nextCandle.AvgUp, nextCandleClose - this._nextCandle.AvgDown);
     }
 
     /// <summary>
@@ -352,13 +361,13 @@ public class RetroVis : Indicator
     /// </summary>
     private (double Up, double Down) GetSessionLevels()
         {
-            int baseCandleIndex = _analysisIndex + 1;
-            if (this.MaxCandles > 0 && (_openBarIndex - baseCandleIndex) >= this.MaxCandles)
-                baseCandleIndex = _openBarIndex - this.MaxCandles + 1;
+            int baseCandleIndex = this._analysisIndex + 1;
+            if (this.MaxCandles > 0 && (this._openBarIndex - baseCandleIndex) >= this.MaxCandles)
+                baseCandleIndex = this._openBarIndex - this.MaxCandles + 1;
                 baseCandleIndex = Math.Clamp(baseCandleIndex, 0, Math.Max(0, this.Count - 1));
 
             double _currentPriceBase = this.Close(baseCandleIndex);
-            return (_currentPriceBase + _candlesSummary.AvgUp, _currentPriceBase - _candlesSummary.AvgDown);
+            return (_currentPriceBase + this._candlesSummary.AvgUp, _currentPriceBase - this._candlesSummary.AvgDown);
     }
 
     /// <summary>
@@ -367,28 +376,18 @@ public class RetroVis : Indicator
     private (double Up, double Down) GetOrderTpLevels() =>
         this.OrderTpSource == "Session" ? this.GetSessionLevels() : this.GetNextCandleLevels();
 
-    private Rectangle GetLongButtonRect() => new(_toggleRect.X, _toggleRect.Y + 35 + _lastPanelHeight + 10, 160, 30);
-    private Rectangle GetShortButtonRect() => new(_toggleRect.X + 170, _toggleRect.Y + 35 + _lastPanelHeight + 10, 160, 30);
+    private Rectangle GetLongButtonRect() => new(this._toggleRect.X, this._toggleRect.Y + 35 + this._lastPanelHeight + 10, 160, 30);
+    private Rectangle GetShortButtonRect() => new(this._toggleRect.X + 170, this._toggleRect.Y + 35 + this._lastPanelHeight + 10, 160, 30);
 
     private void DrawResultsPanelOnChart(Graphics gr)
     {
-        // Draw blinking circle in top-left corner of chart
-        if (_isBlinking)
+        var sessionUp = this._candlesSummary.AvgUp > this._candlesSummary.AvgDown;
+        var candleUp = this._nextCandle.AvgUp > this._nextCandle.AvgDown;
+        if (this._candlesSummary.Confidence >= 70f && this._nextCandle.Confidence >= 70f && sessionUp == candleUp)
         {
-            var elapsed = DateTime.UtcNow - _blinkStartTime;
-            if (elapsed < BlinkDuration)
-            {
-                bool visible = (int)(elapsed.TotalMilliseconds / BlinkInterval.TotalMilliseconds) % 2 == 0;
-                if (visible)
-                {
-                    var chartRect = this.CurrentChart.MainWindow.ClientRectangle;
-                    _panelRenderer.DrawBlinkingCircle(gr, chartRect, _blinkEdgePositive);
-                }
-            }
-            else
-            {
-                _isBlinking = false;
-            }
+            var chartRect = this.CurrentChart.MainWindow.ClientRectangle;
+            this._alertEdgePositive = this._candlesSummary.AvgUp > Math.Abs(this._candlesSummary.AvgDown);
+            PanelRenderer.DrawAlertCircle(gr, chartRect, this._alertEdgePositive);
         }
 
         // Calculate position sizes for display
@@ -396,7 +395,7 @@ public class RetroVis : Indicator
         var (levelUp, levelDown) = this.GetOrderTpLevels();
         
         double longQty = 0, shortQty = 0;
-        if (this.Symbol != null && _currentCandleCount >= this.MinCandles)
+        if (this.Symbol != null && this._currentCandleCount >= this.MinCandles)
         {
             var longResult = PositionSizer.CalculateSize(
                 this.Symbol, currentPrice, levelUp, this.RiskAmount);
@@ -408,31 +407,31 @@ public class RetroVis : Indicator
         }
 
         var state = new PanelState(
-            EffectiveSession: _effectiveSession,
-            CurrentCandleCount: _currentCandleCount,
+            EffectiveSession: this._effectiveSession,
+            CurrentCandleCount: this._currentCandleCount,
             MinCandles: this.MinCandles,
-            CurrentDelta: _currentDelta,
-            CandlesSummary: _candlesSummary,
-            NextCandle: _nextCandle,
-            CandlesResults: _candlesResults,
-            ContextSummary: _contextSummary,
-            ContextResults: _contextResults,
-            IsLoadingNewAnalysis: _currentAnalysisText == "Loading new Analysis...",
+            CurrentDelta: this._currentDelta,
+            CandlesSummary: this._candlesSummary,
+            NextCandle: this._nextCandle,
+            CandlesResults: this._candlesResults,
+            ContextSummary: this._contextSummary,
+            ContextResults: this._contextResults,
+            IsLoadingNewAnalysis: this._currentAnalysisText == "Loading new Analysis...",
             PositionSizeLong: longQty,
             PositionSizeShort: shortQty,
             HasValidPositionSize: longQty > 0 || shortQty > 0);
 
-        Point origin = new(_toggleRect.X, _toggleRect.Y + 35);
-        var result = _panelRenderer.DrawResultsPanel(gr, origin, 330, _lastPanelHeight, state);
+        Point origin = new(this._toggleRect.X, this._toggleRect.Y + 35);
+        var result = this._panelRenderer.DrawResultsPanel(gr, origin, 330, this._lastPanelHeight, state);
 
-        _lastPanelHeight = result.PanelHeight;
-        _matchAreas = new List<MatchClickArea>(result.MatchAreas);
-        _contextAreas = new List<MatchClickArea>(result.ContextAreas);
+        this._lastPanelHeight = result.PanelHeight;
+        this._matchAreas = [.. result.MatchAreas];
+        this._contextAreas = [.. result.ContextAreas];
     }
 
     private void OnChartMouseDown(object sender, ChartMouseNativeEventArgs e)
     {
-        _inputHandler.OnMouseDown(e);
+        this._inputHandler.OnMouseDown(e);
     }
 
     private void OnChartMouseUp(object sender, ChartMouseNativeEventArgs e)
@@ -440,19 +439,19 @@ public class RetroVis : Indicator
         Rectangle longRect = this.SelectedAccount != null ? this.GetLongButtonRect() : Rectangle.Empty;
         Rectangle shortRect = this.SelectedAccount != null ? this.GetShortButtonRect() : Rectangle.Empty;
 
-        var result = _inputHandler.OnMouseUp(
-            e, _toggleRect, _backtestBtnRect, longRect, shortRect,
-            _isPanelVisible, _isBacktestMode,
-            _matchAreas, _contextAreas, _ticker, this.GetFormattedTimeframe());
+        var result = this._inputHandler.OnMouseUp(
+            e, this._toggleRect, this._backtestBtnRect, longRect, shortRect,
+            this._isPanelVisible, this._isBacktestMode,
+            this._matchAreas, this._contextAreas, this._ticker, this.GetFormattedTimeframe());
 
         switch (result.Action)
         {
             case InputAction.TogglePanel:
-                _isPanelVisible = !_isPanelVisible;
+                this._isPanelVisible = !this._isPanelVisible;
                 break;
             case InputAction.ToggleBacktest:
-                _isBacktestMode = !_isBacktestMode;
-                if (!_isBacktestMode) _lastProcessedBarTime = default;
+                this._isBacktestMode = !this._isBacktestMode;
+                if (!this._isBacktestMode) this._lastProcessedBarTime = default;
                 break;
             case InputAction.RunManualAnalysis:
                 this.RunManualAnalysis(result.CandleIndex);
@@ -472,7 +471,7 @@ public class RetroVis : Indicator
         double entryPrice = this.Symbol.Last;
         double tpPrice = side == Side.Buy ? levelUp : levelDown;
 
-        _orderService.PlaceMarketOrder(side, this.Symbol, this.SelectedAccount, entryPrice, tpPrice, this.RiskAmount);
+        this._orderService.PlaceMarketOrder(side, this.Symbol, this.SelectedAccount, entryPrice, tpPrice, this.RiskAmount);
     }
 
     protected void RunManualAnalysis(int candleIndex)
@@ -483,39 +482,39 @@ public class RetroVis : Indicator
 
     private void ProcessAnalysis(int refIndex)
     {
-        _analysisIndex = refIndex;
+        this._analysisIndex = refIndex;
 
         string sessionToUse = this.SessionId;
         if (this.SessionId == "AUTO")
         {
-            sessionToUse = _barReader.ResolveAutoSession(refIndex);
+            sessionToUse = this._barReader.ResolveAutoSession(refIndex);
             if (sessionToUse == null)
             {
-                _effectiveSession = null;
+                this._effectiveSession = null;
                 return;
             }
         }
 
-        _openBarIndex = _barReader.FindSessionOpenBarIndex(refIndex, sessionToUse, this.Count);
-        if (_openBarIndex == -1) return;
-        if (_openBarIndex >= this.MaxCandles && _candlesResults.Count > 0) return;
+        this._openBarIndex = this._barReader.FindSessionOpenBarIndex(refIndex, sessionToUse, this.Count);
+        if (this._openBarIndex == -1) return;
+        if (this._openBarIndex >= this.MaxCandles && this._candlesResults.Count > 0) return;
 
-        _effectiveSession = sessionToUse;
+        this._effectiveSession = sessionToUse;
 
-        string sessionDateKey = $"{sessionToUse}_{this.Time(_openBarIndex):yyyy-MM-dd}";
-        if (sessionDateKey != _lastContextSessionDate)
+        string sessionDateKey = $"{sessionToUse}_{this.Time(this._openBarIndex):yyyy-MM-dd}";
+        if (sessionDateKey != this._lastContextSessionDate)
         {
-            _lastContextSessionDate = sessionDateKey;
+            this._lastContextSessionDate = sessionDateKey;
             _ = this.FetchContextMatchesAsync();
         }
 
-        if ((_openBarIndex - refIndex) < this.MinCandles) return;
+        if ((this._openBarIndex - refIndex) < this.MinCandles) return;
 
-        var candlesToInquire = _barReader.ExtractCandles(_openBarIndex, refIndex, this.MaxCandles);
+        var candlesToInquire = this._barReader.ExtractCandles(this._openBarIndex, refIndex, this.MaxCandles);
 
-        _currentPriceBase = (float)this.Open(_openBarIndex);
-        _currentDelta = (float)this.Close(refIndex) - _currentPriceBase;
-        _currentCandleCount = candlesToInquire.Count;
+        this._currentPriceBase = (float)this.Open(this._openBarIndex);
+        this._currentDelta = (float)this.Close(refIndex) - this._currentPriceBase;
+        this._currentCandleCount = candlesToInquire.Count;
         _ = this.FetchMatchesAsync(candlesToInquire);
     }
 
@@ -532,18 +531,18 @@ public class RetroVis : Indicator
     {
         this.CurrentChart.MouseUp -= this.OnChartMouseUp;
         this.CurrentChart.MouseDown -= this.OnChartMouseDown;
-        _alertService?.Dispose();
-        _apiClient?.Dispose();
-        _autoOrderService?.Dispose();
+        this._alertService?.Dispose();
+        this._apiClient?.Dispose();
+        this._autoOrderService?.Dispose();
         GC.SuppressFinalize(this);
     }
 
     protected void InitTicker()
     {
         string symbol = this.Symbol.Description.ToLower();
-        if (symbol.Contains("nasdaq")) _ticker = "NQ";
-        else if (symbol.Contains("s&p")) _ticker = "ES";
-        else if (symbol.Contains("gold")) _ticker = "GC";
-        else if (symbol.Contains("dow")) _ticker = "YM";
+        if (symbol.Contains("nasdaq")) this._ticker = "NQ";
+        else if (symbol.Contains("s&p")) this._ticker = "ES";
+        else if (symbol.Contains("gold")) this._ticker = "GC";
+        else if (symbol.Contains("dow")) this._ticker = "YM";
     }
 }

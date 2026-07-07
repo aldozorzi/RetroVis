@@ -128,7 +128,7 @@ public class AutoOrderService : IDisposable
         };
 
         RetroVisLog.Info($"AutoOrderService: placing {side} {quantity} {symbol.Name} @ {entryPrice:F2} (SL {slOffsetTicks:F1} ticks, TP {tpTicks:F1} ticks, risk ${riskAmount})");
-        Core.Instance.PlaceOrder(request);
+        //Core.Instance.PlaceOrder(request);
     }
 
     public void Dispose()

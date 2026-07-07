@@ -2,3 +2,6 @@
 
 # IDE0022: Usare il corpo dell'espressione per il metodo
 dotnet_diagnostic.IDE0022.severity = silent
+
+# IDE0130: La parola chiave namespace non corrisponde alla struttura di cartelle
+dotnet_diagnostic.IDE0130.severity = none
