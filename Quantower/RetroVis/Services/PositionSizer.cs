@@ -35,7 +35,7 @@ public static class PositionSizer
         if (distancePoints <= 0)
             return new SizeCalculation(0, 0, 0, false, "Invalid TP distance (<=0)");
 
-        double sizingDistance = distancePoints / 2.0;
+        double sizingDistance = distancePoints;
 
         double slTicks = symbol.CalculateTicks(entryPrice, entryPrice + sizingDistance);
         double tpTicks = symbol.CalculateTicks(entryPrice, entryPrice + distancePoints);

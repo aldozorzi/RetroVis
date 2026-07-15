@@ -22,7 +22,8 @@ public readonly record struct PanelState(
     bool IsLoadingNewAnalysis,
     double PositionSizeLong,
     double PositionSizeShort,
-    bool HasValidPositionSize
+    bool HasValidPositionSize,
+    bool ShowContextMatches
 );
 
 public readonly record struct PanelDrawResult(
@@ -137,7 +138,7 @@ public class PanelRenderer
             ty = this.DrawMatchRows(gr, tx, ty, panelRect.Width, state.CandlesResults, matchAreas);
         }
 
-        if (state.ContextResults != null && state.ContextResults.Count > 0)
+        if (state.ShowContextMatches && state.ContextResults != null && state.ContextResults.Count > 0)
         {
             ty += 10;
             gr.DrawString("CONTEXT MATCHES", this._headerFont, Brushes.Orange, tx, ty);

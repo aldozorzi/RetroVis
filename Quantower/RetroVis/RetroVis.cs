@@ -51,6 +51,8 @@ public class RetroVis : Indicator
     [InputParameter("Enable Auto Orders", 115)]
     public bool EnableAutoOrders { get; set; } = false;
 
+    [InputParameter("Show Context Matches", 130)]
+    public bool ShowContextMatches { get; set; } = false;
 
 
     //[InputParameter("Order TP Source", 12, variants: ["Next Candle Levels", "NextCandle", "Session Levels", "Session"])]
@@ -173,6 +175,7 @@ public class RetroVis : Indicator
         {
             base.OnSettingsUpdated();
             this._alertService?.LoadSound(this.AlertSoundPath);
+            CloseAlertService.Reset();
             this.Reset();
             this._lastProcessedBarIndex = -1;  // Reset bar index tracking when settings change
         }
@@ -419,7 +422,9 @@ public class RetroVis : Indicator
             IsLoadingNewAnalysis: this._currentAnalysisText == "Loading new Analysis...",
             PositionSizeLong: longQty,
             PositionSizeShort: shortQty,
-            HasValidPositionSize: longQty > 0 || shortQty > 0);
+            HasValidPositionSize: longQty > 0 || shortQty > 0,
+            ShowContextMatches: this.ShowContextMatches
+        );
 
         Point origin = new(this._toggleRect.X, this._toggleRect.Y + 35);
         var result = this._panelRenderer.DrawResultsPanel(gr, origin, 330, this._lastPanelHeight, state);
