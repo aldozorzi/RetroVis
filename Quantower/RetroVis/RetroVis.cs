@@ -18,7 +18,7 @@ public class RetroVis : Indicator
     [InputParameter("Account", 10)]
     public Account SelectedAccount;
 
-    [InputParameter("Session Type", 20, variants: ["AUTO", "AUTO", "NY_OPEN", "NY_OPEN", "LONDON_OPEN", "LONDON_OPEN"])]
+    [InputParameter("Session Type", 20, variants: ["AUTO", "AUTO", "NY_OPEN", "NY_OPEN", "LONDON_OPEN", "LONDON_OPEN", "CPI", "CPI", "PPI", "PPI", "NFP", "NFP", "FOMC", "FOMC"])]
     public string SessionId = "AUTO";
 
     [InputParameter("Min Candles for Pattern", 30, 1, 15, 1)]

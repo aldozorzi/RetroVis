@@ -57,6 +57,8 @@ pub struct SessionConfig {
     pub id: String,
     pub start_time: NaiveTime,
     pub timezone: String,
+    #[serde(default)]
+    pub duration_secs: Option<u32>,
 }
 
 pub struct Context {

@@ -30,8 +30,9 @@ pub fn compute_candle_history(
                 let normalized: Vec<NormalizedCandle<f32>> = slice.iter()
                     .map(|raw| NormalizedCandle::from_raw(raw, session_open))
                     .collect();
+                let valid_dates = state.news_dates.get(session_id);
                 let matches = engine.find_matches(
-                    &normalized, top_k.min(10), session, (timeframe_seconds / 60) as u32
+                    &normalized, top_k.min(10), session, (timeframe_seconds / 60) as u32, valid_dates
                 );
                 let (summary, custom_matches) = calculate_aggregates(&matches, session_open, last_close);
                 CachedResult::from_aggregates(summary, custom_matches)
@@ -59,7 +60,8 @@ pub fn compute_context(
         let ctx = Context::new(
             session_open, prev_close, prev_high, prev_low, intraday_high, intraday_low,
         );
-        let matches = engine.find_context_matches(&ctx, top_k.min(10), session, timestamp);
+        let valid_dates = state.news_dates.get(session_id);
+        let matches = engine.find_context_matches(&ctx, top_k.min(10), session, timestamp, valid_dates);
         let (summary, custom_matches) = calculate_aggregates(&matches, session_open, session_open);
         CachedResult::from_aggregates(summary, custom_matches)
     })

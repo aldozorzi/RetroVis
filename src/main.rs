@@ -3,7 +3,7 @@ use axum::{
     Router,
 };
 use std::sync::Arc;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use chrono::NaiveTime;
 use dotenvy::dotenv;
 use std::thread;
@@ -50,19 +50,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         id: "LONDON_OPEN".to_string(),
         start_time: NaiveTime::from_hms_opt(8, 0, 0).unwrap(),
         timezone: "Europe/London".to_string(),
+        duration_secs: None,
     });
     sessions.insert("NY_OPEN".to_string(), models::SessionConfig {
         id: "NY_OPEN".to_string(),
         start_time: NaiveTime::from_hms_opt(9, 30, 0).unwrap(),
         timezone: "America/New_York".to_string(),
+        duration_secs: None,
+    });
+
+    // News event sessions — fixed start/end in NY time, only on specific dates
+    sessions.insert("CPI".to_string(), models::SessionConfig {
+        id: "CPI".to_string(),
+        start_time: NaiveTime::from_hms_opt(8, 30, 0).unwrap(),
+        timezone: "America/New_York".to_string(),
+        duration_secs: Some(3600),
+    });
+    sessions.insert("PPI".to_string(), models::SessionConfig {
+        id: "PPI".to_string(),
+        start_time: NaiveTime::from_hms_opt(8, 30, 0).unwrap(),
+        timezone: "America/New_York".to_string(),
+        duration_secs: Some(3600),
+    });
+    sessions.insert("NFP".to_string(), models::SessionConfig {
+        id: "NFP".to_string(),
+        start_time: NaiveTime::from_hms_opt(8, 30, 0).unwrap(),
+        timezone: "America/New_York".to_string(),
+        duration_secs: Some(3600),
+    });
+    sessions.insert("FOMC".to_string(), models::SessionConfig {
+        id: "FOMC".to_string(),
+        start_time: NaiveTime::from_hms_opt(14, 0, 0).unwrap(),
+        timezone: "America/New_York".to_string(),
+        duration_secs: Some(3600),
     });
 
     let cache = Arc::new(cache::RetroVisCache::new());
+
+    // Load news event date files — each file contains one date per line (YYYY-MM-DD)
+    let mut news_dates: HashMap<String, HashSet<u32>> = HashMap::new();
+    for (session_id, path) in [
+        ("CPI", "data/CPI.txt"),
+        ("PPI", "data/PPI.txt"),
+        ("NFP", "data/NFP.txt"),
+        ("FOMC", "data/FOMC.txt"),
+    ] {
+        let dates = load_dates_file(path);
+        println!("Loaded {} dates for {}", dates.len(), session_id);
+        news_dates.insert(session_id.to_string(), dates);
+    }
 
     let shared_state = Arc::new(AppState {
         engines,
         sessions,
         cache,
+        news_dates,
     });
 
     let app = Router::new()
@@ -90,4 +132,26 @@ async fn shutdown_signal() {
 
 fn clear_terminal() {
     print!("{esc}[2J{esc}[1;1H", esc = 27 as char);
+}
+
+/// Loads a news event date file — one date per line in YYYY-MM-DD format.
+/// Returns an empty set if the file cannot be read (graceful degradation).
+fn load_dates_file(path: &str) -> HashSet<u32> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => {
+            content
+                .lines()
+                .map(|l| l.trim())
+                .filter(|l| l.len() == 10 && l.contains('-'))
+                .filter_map(|l| {
+                    let digits: String = l.chars().filter(|c| c.is_ascii_digit()).collect();
+                    digits.parse::<u32>().ok()
+                })
+                .collect()
+        }
+        Err(e) => {
+            eprintln!("Warning: could not load {}: {}", path, e);
+            HashSet::new()
+        }
+    }
 }

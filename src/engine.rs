@@ -3,6 +3,7 @@ use chrono::{Timelike, TimeZone};
 use chrono_tz::America::New_York;
 use std::str::FromStr;
 use std::borrow::Cow;
+use std::collections::HashSet;
 
 // CSV market data files are stored at 5-minute native resolution.
 pub const NATIVE_TIMEFRAME_MIN: u32 = 5;
@@ -68,6 +69,7 @@ impl SearchEngine {
         top_k: usize,
         session: &crate::models::SessionConfig,
         timeframe: u32,
+        valid_dates: Option<&HashSet<u32>>,
     ) -> Vec<crate::models::MatchOutcome> {
         let len = current_pattern.len();
         let mut outcomes = Vec::new();
@@ -77,7 +79,11 @@ impl SearchEngine {
         let session_offset_secs = Self::get_ny_seconds_for_session(session, current_date);
 
         for i in 0..self.dataset.len() {
-            let (_, raw_day_candles) = match self.dataset.get(i) { Some(d) => d, None => continue };
+            let (day_date_num, raw_day_candles) = match self.dataset.get(i) { Some(d) => d, None => continue };
+            // For news-event sessions, only search on dates present in the valid-dates file
+            if let Some(dates) = valid_dates {
+                if !dates.contains(&day_date_num) { continue; }
+            }
             if raw_day_candles.is_empty() { continue; }
 
             let candles = Self::maybe_resample(raw_day_candles, timeframe);
@@ -125,6 +131,7 @@ impl SearchEngine {
         top_k: usize,
         session: &crate::models::SessionConfig,
         timestamp: u32,
+        valid_dates: Option<&HashSet<u32>>,
     ) -> Vec<crate::models::MatchOutcome> {
         let mut outcomes = Vec::new();
 
@@ -133,8 +140,12 @@ impl SearchEngine {
         let session_offset_secs = Self::get_ny_seconds_for_session(session, current_date);
 
         for i in 1..self.dataset.len() {
-            let (_, candles)      = match self.dataset.get(i)     { Some(d) => d, None => continue };
+            let (date_num, candles)       = match self.dataset.get(i)     { Some(d) => d, None => continue };
             let (_, prev_candles) = match self.dataset.get(i - 1) { Some(d) => d, None => continue };
+            // For news-event sessions, only search on dates present in the valid-dates file
+            if let Some(dates) = valid_dates {
+                if !dates.contains(&date_num) { continue; }
+            }
             if candles.is_empty() { continue; }
 
             let session_start = match Self::find_session_start(&candles, session_offset_secs) {
@@ -218,7 +229,13 @@ impl SearchEngine {
         day_start_timestamp: u32,
         start_idx: usize,
     ) -> usize {
-        let end_idx = if session.id == "LONDON_OPEN" {
+        let end_idx = if let Some(duration) = session.duration_secs {
+            // Fixed-duration session (e.g. news events): lasts `duration` seconds from session start
+            let end_ts = candles[start_idx].timestamp + duration;
+            candles.iter()
+                .position(|c| c.timestamp >= end_ts)
+                .unwrap_or(candles.len() - 1)
+        } else if session.id == "LONDON_OPEN" {
             let london_end = day_start_timestamp + LONDON_SESSION_WINDOW_SECS;
             candles.iter().position(|c| c.timestamp == london_end).unwrap_or(candles.len() - 1)
         } else {

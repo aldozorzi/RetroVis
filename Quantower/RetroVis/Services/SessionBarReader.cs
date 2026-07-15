@@ -48,12 +48,33 @@ public class SessionBarReader
     /// <summary>
     /// Searches forward from refIndex (up to 200 bars) for the bar matching
     /// the session's open time in its own timezone. Returns -1 if not found.
+    /// News-event sessions (CPI, PPI, NFP, FOMC) use NY time as their native
+    /// timezone; LONDON_OPEN uses London time; NY_OPEN uses NY time.
     /// </summary>
     public int FindSessionOpenBarIndex(int refIndex, string sessionId, int chartCount)
     {
-        int targetHour = sessionId == "NY_OPEN" ? 9 : 8;
-        int targetMinute = sessionId == "NY_OPEN" ? 30 : 0;
-        TimeZoneInfo sessionTz = sessionId == "NY_OPEN" ? _nyTz : _londonTz;
+        int targetHour, targetMinute;
+        TimeZoneInfo sessionTz;
+
+        switch (sessionId)
+        {
+            case "CPI":
+            case "PPI":
+            case "NFP":
+                targetHour = 8; targetMinute = 30; sessionTz = _nyTz;
+                break;
+            case "FOMC":
+                targetHour = 14; targetMinute = 0; sessionTz = _nyTz;
+                break;
+            case "NY_OPEN":
+                targetHour = 9; targetMinute = 30; sessionTz = _nyTz;
+                break;
+            case "LONDON_OPEN":
+                targetHour = 8; targetMinute = 0; sessionTz = _londonTz;
+                break;
+            default:
+                return -1;
+        }
 
         for (int i = refIndex; i < Math.Min(chartCount, refIndex + 200); i++)
         {
