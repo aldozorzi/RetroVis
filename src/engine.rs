@@ -1,5 +1,5 @@
 use crate::models::{CandleStore, NormalizedCandle, RawCandle};
-use chrono::{Timelike, TimeZone};
+use chrono::{Timelike, TimeZone, NaiveDate};
 use chrono_tz::America::New_York;
 use std::str::FromStr;
 use std::borrow::Cow;
@@ -63,6 +63,13 @@ impl SearchEngine {
         distance.sqrt()
     }
 
+    fn decode_naive_ny_date(timestamp: u32) -> NaiveDate {
+        chrono::DateTime::from_timestamp(timestamp as i64, 0)
+        .unwrap()
+        .naive_utc()
+        .date()
+    }
+
     pub fn find_matches(
         &self,
         current_pattern: &[NormalizedCandle<f32>],
@@ -74,13 +81,17 @@ impl SearchEngine {
         let len = current_pattern.len();
         let mut outcomes = Vec::new();
 
-        let current_dt = New_York.timestamp_opt(current_pattern[0].timestamp as i64, 0).unwrap();
-        let current_date = current_dt.date_naive();
+        // --- DEBUG: attiva solo per la query incriminata ---
+        let debug_this_call = current_pattern[0].timestamp as u32 == 1784257200;
+        let debug_target_date: u32 = 20151209; // <-- metti qui la data del match sospetto (YYYYMMDD)
+        // -----------------------------------------------------
+
+        let current_date = Self::decode_naive_ny_date(current_pattern[0].timestamp);
         let session_offset_secs = Self::get_ny_seconds_for_session(session, current_date);
+
 
         for i in 0..self.dataset.len() {
             let (day_date_num, raw_day_candles) = match self.dataset.get(i) { Some(d) => d, None => continue };
-            // For news-event sessions, only search on dates present in the valid-dates file
             if let Some(dates) = valid_dates {
                 if !dates.contains(&day_date_num) { continue; }
             }
@@ -103,7 +114,37 @@ impl SearchEngine {
                 .collect();
             let dist = Self::calculate_distance(current_pattern, &historical_pattern);
 
-            // Price action of the candle immediately after the matched pattern (point X + 1).
+            // --- DEBUG: stampa solo per il giorno sospetto, dentro la query incriminata ---
+            if debug_this_call && day_date_num == debug_target_date {
+                let day_start_ny = chrono::DateTime::from_timestamp(day_start_timestamp as i64, 0).unwrap().naive_utc();
+                println!("=== START NEW CANDLE ===");
+                println!("day_start_timestamp NY = {} (ts={})", day_start_ny.format("%Y-%m-%d %H:%M:%S"), day_start_timestamp);
+                println!("session_offset_secs = {} ({}h{}m)", session_offset_secs, session_offset_secs / 3600, (session_offset_secs % 3600) / 60);
+                println!("target_start_timestamp NY = {}", chrono::DateTime::from_timestamp(target_start_timestamp as i64, 0).unwrap().naive_utc().format("%Y-%m-%d %H:%M:%S"));
+                println!("=== DEBUG giorno {} start_idx={} baseline={} ===", day_date_num, start_idx, baseline);
+                for (i, (cur, raw_hist)) in current_pattern.iter()
+                    .zip(candles[start_idx..start_idx + len].iter())
+                    .enumerate()
+                {
+                    let hist = NormalizedCandle::from_raw(raw_hist, baseline);
+
+                    // decodifica il timestamp come NY wall-clock (nessuno shift di fuso)
+                    let ny_dt = chrono::DateTime::from_timestamp(raw_hist.timestamp as i64, 0)
+                        .unwrap()
+                        .naive_utc();
+
+                    println!(
+                        "candela {} @ {} NY (ts={}): storico OHLC o={:.2} h={:.2} l={:.2} c={:.2} | cur(body={:.4} wu={:.4} wd={:.4} rng={:.4}) | hist(body={:.4} wu={:.4} wd={:.4} rng={:.4})",
+                        i, ny_dt.format("%Y-%m-%d %H:%M:%S"), raw_hist.timestamp,
+                        raw_hist.open, raw_hist.high, raw_hist.low, raw_hist.close,
+                        cur.body_pct, cur.wick_up_pct, cur.wick_down_pct, cur.range_pct,
+                        hist.body_pct, hist.wick_up_pct, hist.wick_down_pct, hist.range_pct
+                    );
+                }
+                println!("=== distanza totale = {} ===", dist);
+            }
+            // --------------------------------------------------------------------------
+
             let next_idx = start_idx + len;
             let (next_up_pct, next_down_pct) = if next_idx < candles.len() && baseline > 0.0 {
                 let next_c = &candles[next_idx];
@@ -135,8 +176,7 @@ impl SearchEngine {
     ) -> Vec<crate::models::MatchOutcome> {
         let mut outcomes = Vec::new();
 
-        let current_dt = New_York.timestamp_opt(timestamp as i64, 0).unwrap();
-        let current_date = current_dt.date_naive();
+        let current_date = Self::decode_naive_ny_date(timestamp);
         let session_offset_secs = Self::get_ny_seconds_for_session(session, current_date);
 
         for i in 1..self.dataset.len() {
@@ -186,7 +226,14 @@ impl SearchEngine {
     }
 
     fn find_session_start(candles: &[RawCandle<f32>], session_offset_secs: u32) -> Option<SessionStart> {
-        let day_start_timestamp = candles[0].timestamp;
+        // Cerca la candela di mezzanotte NY nello slice, invece di assumere candles[0].
+        let midnight_ts = (candles[0].timestamp / 86_400) * 86_400;
+
+        let day_start_timestamp = match candles.binary_search_by_key(&midnight_ts, |c| c.timestamp) {
+            Ok(_) => midnight_ts,
+            Err(_) => return None, // mezzanotte non presente in questo slice -> giorno da scartare
+        };
+
         let target_start_timestamp = day_start_timestamp + session_offset_secs;
         let start_idx = match candles.binary_search_by_key(&target_start_timestamp, |c| c.timestamp) {
             Ok(idx) => idx,
@@ -283,5 +330,88 @@ impl SearchEngine {
         } else {
             Cow::Owned(crate::parser::resample_slice(raw, timeframe_min))
         }
+    }
+}
+
+
+#[cfg(test)]
+mod session_alignment_tests {
+    use super::*;
+    use crate::models::RawCandle;
+
+    /// Costruisce un timestamp "naive-as-NY" per una data/ora, con lo stesso
+    /// schema di encoding usato da parser.rs::calculate_timestamp.
+    fn naive_ts(y: i32, m: u32, d: u32, h: u32, min: u32) -> u32 {
+        chrono::NaiveDate::from_ymd_opt(y, m, d)
+            .unwrap()
+            .and_hms_opt(h, min, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp() as u32
+    }
+
+    fn dummy_candle(ts: u32) -> RawCandle<f32> {
+        RawCandle { timestamp: ts, open: 100.0, high: 101.0, low: 99.0, close: 100.5 }
+    }
+
+    // --- decode_naive_ny_date ---
+
+    #[test]
+    fn decode_naive_ny_date_no_timezone_shift() {
+        // Le 03:00 NY del 17/07/2026 devono restare 03:00 del 17/07/2026,
+        // MAI shiftate da una conversione di fuso (era il bug C#/New_York.timestamp_opt).
+        let ts = naive_ts(2026, 7, 17, 3, 0);
+        let date = SearchEngine::decode_naive_ny_date(ts);
+        assert_eq!(date, chrono::NaiveDate::from_ymd_opt(2026, 7, 17).unwrap());
+    }
+
+    // --- find_session_start: giorno normale, mezzanotte presente ---
+
+    #[test]
+    fn find_session_start_normal_day_finds_midnight_correctly() {
+        let candles: Vec<RawCandle<f32>> = (0..12) // 00:00 .. 05:30, ogni 30 min
+            .map(|i| dummy_candle(naive_ts(2015, 12, 9, 0, 0) + i * 1800))
+            .collect();
+
+        let session_offset_secs = 3 * 3600; // Londra: 03:00 NY
+        let result = SearchEngine::find_session_start(&candles, session_offset_secs);
+
+        assert!(result.is_some());
+        let s = result.unwrap();
+        assert_eq!(s.day_start_timestamp, naive_ts(2015, 12, 9, 0, 0));
+        assert_eq!(s.target_start_timestamp, naive_ts(2015, 12, 9, 3, 0));
+        assert_eq!(candles[s.start_idx].timestamp, naive_ts(2015, 12, 9, 3, 0));
+    }
+
+    // --- find_session_start: riapertura domenicale Globex (niente mezzanotte) ---
+
+    #[test]
+    fn find_session_start_sunday_reopen_returns_none() {
+        // Domenica: il mercato riapre alle 18:00 NY, la mezzanotte non esiste nello slice.
+        // Regressione diretta del bug: prima veniva usato candles[0] (18:00) come falsa
+        // "mezzanotte", producendo un target_start_timestamp di 21:00 (18:00+3h) invece
+        // di scartare il giorno.
+        let candles: Vec<RawCandle<f32>> = (0..12) // 18:00 .. 23:30
+            .map(|i| dummy_candle(naive_ts(2022, 5, 22, 18, 0) + i * 1800))
+            .collect();
+
+        let session_offset_secs = 3 * 3600;
+        let result = SearchEngine::find_session_start(&candles, session_offset_secs);
+
+        assert!(result.is_none(), "un giorno senza mezzanotte deve essere scartato, non produrre un falso match");
+    }
+
+    // --- find_session_start: mezzanotte presente ma target oltre la fine dello slice ---
+
+    #[test]
+    fn find_session_start_target_beyond_slice_returns_none() {
+        let candles: Vec<RawCandle<f32>> = (0..4) // 00:00 .. 01:30 soltanto
+            .map(|i| dummy_candle(naive_ts(2015, 12, 9, 0, 0) + i * 1800))
+            .collect();
+
+        let session_offset_secs = 3 * 3600; // target 03:00, fuori dallo slice disponibile
+        let result = SearchEngine::find_session_start(&candles, session_offset_secs);
+
+        assert!(result.is_none());
     }
 }

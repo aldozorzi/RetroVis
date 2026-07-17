@@ -100,7 +100,7 @@ public class SessionBarReader
         {
             result.Add(new RawCandle
             {
-                Timestamp = (uint)((DateTimeOffset)BarTimeNy(i)).ToUnixTimeSeconds(),
+                Timestamp = (uint)new DateTimeOffset(BarTimeNy(i), TimeSpan.Zero).ToUnixTimeSeconds(),
                 Open = (float)_data.Open(i),
                 High = (float)_data.High(i),
                 Low = (float)_data.Low(i),
