@@ -456,7 +456,11 @@ public class RetroVis : Indicator
                 break;
             case InputAction.ToggleBacktest:
                 this._isBacktestMode = !this._isBacktestMode;
-                if (!this._isBacktestMode) this._lastProcessedBarTime = default;
+                if (!this._isBacktestMode)
+                {
+                    this._lastProcessedBarTime = default;
+                    this.RunManualAnalysis(0);
+                }
                 break;
             case InputAction.RunManualAnalysis:
                 this.RunManualAnalysis(result.CandleIndex);
