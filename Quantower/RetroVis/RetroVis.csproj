@@ -10,10 +10,10 @@
     <RootNamespace>RetroVis</RootNamespace>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
-    <OutputPath>C:\Quantower\TradingPlatform\v1.146.14\..\..\Settings\Scripts\Indicators\RetroVis</OutputPath>
+    <OutputPath>C:\Quantower\TradingPlatform\v1.146.16\..\..\Settings\Scripts\Indicators\RetroVis</OutputPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
-    <OutputPath>C:\Quantower\TradingPlatform\v1.146.14\..\..\Settings\Scripts\Indicators\RetroVis</OutputPath>
+    <OutputPath>C:\Quantower\TradingPlatform\v1.146.16\..\..\Settings\Scripts\Indicators\RetroVis</OutputPath>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.Windows.Extensions" Version="8.0.0" />
@@ -25,10 +25,10 @@
   </ItemGroup>
   <ItemGroup>
     <Reference Include="System.Drawing.Common">
-      <HintPath>..\..\..\..\..\Quantower\TradingPlatform\v1.146.14\bin\System\System.Drawing.Common.dll</HintPath>
+      <HintPath>..\..\..\..\..\Quantower\TradingPlatform\v1.146.16\bin\System\System.Drawing.Common.dll</HintPath>
     </Reference>
     <Reference Include="TradingPlatform.BusinessLayer">
-      <HintPath>C:\Quantower\TradingPlatform\v1.146.14\bin\TradingPlatform.BusinessLayer.dll</HintPath>
+      <HintPath>..\..\..\..\..\Quantower\TradingPlatform\v1.146.16\bin\TradingPlatform.BusinessLayer.dll</HintPath>
     </Reference>
   </ItemGroup>
 </Project>
