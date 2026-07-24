@@ -3,6 +3,9 @@ name = "retro-vis"
 version = "0.1.0"
 edition = "2024"
 
+[build-dependencies]
+embed-resource = "3"
+
 [dependencies]
 axum = { version = "0.7", default-features = false, features = ["tokio", "http1", "json", "query"] }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "time", "signal"] }
@@ -20,4 +23,6 @@ async-trait = "0.1.89"
 indoc = "2.0.7"
 thiserror = "2"
 memmap2 = "0.9.10"
+
+
 
