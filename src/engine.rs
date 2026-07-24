@@ -415,3 +415,144 @@ mod session_alignment_tests {
         assert!(result.is_none());
     }
 }
+
+#[cfg(test)]
+mod find_matches_integration_tests {
+    use super::*;
+    use crate::models::{CandleStore, RawCandle, NormalizedCandle, SessionConfig};
+
+    fn naive_ts(y: i32, m: u32, d: u32, h: u32, min: u32) -> u32 {
+        chrono::NaiveDate::from_ymd_opt(y, m, d)
+            .unwrap()
+            .and_hms_opt(h, min, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp() as u32
+    }
+
+    fn candle(ts: u32, o: f32, h: f32, l: f32, c: f32) -> RawCandle<f32> {
+        RawCandle { timestamp: ts, open: o, high: h, low: l, close: c }
+    }
+
+    fn london_session() -> SessionConfig {
+        SessionConfig {
+            id: "LONDON_OPEN".to_string(),
+            start_time: chrono::NaiveTime::from_hms_opt(8, 0, 0).unwrap(), // 8am London
+            timezone: "Europe/London".to_string(),
+            duration_secs: None,
+        }
+    }
+
+    /// Dataset con due giorni:
+    /// - una domenica (riapertura Globex 18:00, NIENTE mezzanotte) -> deve essere scartata
+    /// - un giorno feriale normale (mezzanotte presente, apertura Londra alle 03:00 NY)
+    ///   con un pattern quasi identico a quello cercato -> deve essere il match trovato
+    fn build_test_dataset() -> CandleStore {
+        let mut candles = Vec::new();
+        let mut days = Vec::new();
+
+        // Giorno 1: domenica 2022-05-22, apertura Globex 18:00, nessuna mezzanotte nello slice.
+        let sunday_start = candles.len();
+        for i in 0..12 {
+            candles.push(candle(
+                naive_ts(2022, 5, 22, 18, 0) + i * 1800,
+                100.0, 101.0, 99.0, 100.0,
+            ));
+        }
+        days.push((20220522u32, sunday_start..candles.len()));
+
+        // Giorno 2: feriale, 2015-12-09, mezzanotte presente, pattern noto alle 03:00-04:00.
+        let weekday_start = candles.len();
+        for i in 0..12 { // 00:00 .. 05:30
+            candles.push(candle(
+                naive_ts(2015, 12, 9, 0, 0) + i * 1800,
+                200.0, 200.0, 200.0, 200.0,
+            ));
+        }
+        // Sovrascrivi le 3 candele della sessione Londra (03:00, 03:30, 04:00) con
+        // valori che matchano quasi esattamente il pattern corrente cercato sotto.
+        candles[weekday_start + 6] = candle(naive_ts(2015, 12, 9, 3, 0), 100.0, 101.0, 99.5, 100.5);
+        candles[weekday_start + 7] = candle(naive_ts(2015, 12, 9, 3, 30), 100.5, 100.8, 98.0, 98.5);
+        candles[weekday_start + 8] = candle(naive_ts(2015, 12, 9, 4, 0), 98.5, 98.7, 97.0, 97.5);
+        days.push((20151209u32, weekday_start..candles.len()));
+
+        CandleStore { candles, days }
+    }
+
+    #[test]
+    fn find_matches_skips_sunday_and_aligns_to_correct_session() {
+        let dataset = build_test_dataset();
+        let engine = SearchEngine::new(dataset);
+        let session = london_session();
+
+        // Pattern corrente: query "di oggi", 03:00/03:30/04:00 NY, quasi identico
+        // alle candele storiche piazzate nel giorno feriale.
+        let raw_current = vec![
+            candle(naive_ts(2026, 7, 17, 3, 0), 100.0, 101.0, 99.5, 100.5),
+            candle(naive_ts(2026, 7, 17, 3, 30), 100.5, 100.8, 98.0, 98.5),
+            candle(naive_ts(2026, 7, 17, 4, 0), 98.5, 98.7, 97.0, 97.5),
+        ];
+        let baseline = 100.0;
+        let current_pattern: Vec<NormalizedCandle<f32>> = raw_current
+            .iter()
+            .map(|r| NormalizedCandle::from_raw(r, baseline))
+            .collect();
+
+        let results = engine.find_matches(&current_pattern, 5, &session, 30, None);
+
+        assert!(!results.is_empty(), "deve trovare almeno un match valido");
+        // Il match trovato deve provenire dal giorno feriale (start_idx=6, ts 03:00 del 2015-12-09),
+        // MAI dalla domenica (che non ha mezzanotte e va scartata).
+        assert_eq!(results[0].timestamp, naive_ts(2015, 12, 9, 3, 0));
+        // La distanza dev'essere piccola, visto che il pattern storico è quasi identico.
+        assert!(results[0].distance < 1.0, "distanza troppo alta: {}", results[0].distance);
+    }
+}
+
+#[cfg(test)]
+mod session_offset_tests {
+    use super::*;
+    use crate::models::SessionConfig;
+
+    fn london_8am() -> SessionConfig {
+        SessionConfig {
+            id: "LONDON_OPEN".to_string(),
+            start_time: chrono::NaiveTime::from_hms_opt(8, 0, 0).unwrap(),
+            timezone: "Europe/London".to_string(),
+            duration_secs: None,
+        }
+    }
+
+    #[test]
+    fn london_open_in_full_summer_dst_is_3am_ny() {
+        // Luglio: sia UK (BST, UTC+1) sia US (EDT, UTC-4) sono in DST.
+        // 8:00 London = 7:00 UTC = 3:00 NY.
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 7, 17).unwrap();
+        let offset = SearchEngine::get_ny_seconds_for_session(&london_8am(), date);
+        assert_eq!(offset, 3 * 3600);
+    }
+
+    #[test]
+    fn london_open_in_full_winter_is_3am_ny() {
+        // Gennaio: nessuno dei due è in DST (UK=GMT UTC+0, US=EST UTC-5).
+        // 8:00 London = 8:00 UTC = 3:00 NY. Stesso offset del caso estivo,
+        // perché il differenziale London-NY resta 5h tutto l'anno TRANNE
+        // nelle settimane di mismatch (vedi test sotto).
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+        let offset = SearchEngine::get_ny_seconds_for_session(&london_8am(), date);
+        assert_eq!(offset, 3 * 3600);
+    }
+
+    #[test]
+    fn london_open_during_us_uk_dst_mismatch_week_shifts_by_one_hour() {
+        // Nel 2026, gli USA passano a DST l'8 marzo, il Regno Unito il 29 marzo.
+        // Nella finestra 8-29 marzo: US già in EDT (UTC-4), UK ancora in GMT (UTC+0).
+        // 8:00 London (GMT) = 8:00 UTC = 4:00 NY (non più 3:00!).
+        // Questo è esattamente il tipo di caso che il codice attuale gestisce male
+        // se session_offset_secs viene calcolato una sola volta e riusato per
+        // giorni storici che cadono in stagioni diverse.
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
+        let offset = SearchEngine::get_ny_seconds_for_session(&london_8am(), date);
+        assert_eq!(offset, 4 * 3600, "durante il mismatch DST UK/US l'offset deve spostarsi di 1h");
+    }
+}
