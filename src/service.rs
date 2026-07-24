@@ -61,7 +61,7 @@ pub fn compute_context(
             session_open, prev_close, prev_high, prev_low, intraday_high, intraday_low,
         );
         let valid_dates = state.news_dates.get(session_id);
-        let matches = engine.find_context_matches(&ctx, top_k.min(10), session, timestamp, valid_dates);
+        let matches = engine.find_context_matches(&ctx, top_k.min(10), session, valid_dates);
         let (summary, custom_matches) = calculate_aggregates(&matches, session_open, session_open);
         CachedResult::from_aggregates(summary, custom_matches)
     })

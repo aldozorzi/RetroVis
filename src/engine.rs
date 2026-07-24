@@ -82,12 +82,9 @@ impl SearchEngine {
         let mut outcomes = Vec::new();
 
         // --- DEBUG: attiva solo per la query incriminata ---
-        let debug_this_call = current_pattern[0].timestamp as u32 == 1784257200;
-        let debug_target_date: u32 = 20151209; // <-- metti qui la data del match sospetto (YYYYMMDD)
+        let debug_this_call = current_pattern[0].timestamp as u32 == 1784862000;
+        let debug_target_date: u32 = 20080320; // <-- metti qui la data del match sospetto (YYYYMMDD)
         // -----------------------------------------------------
-
-        let current_date = Self::decode_naive_ny_date(current_pattern[0].timestamp);
-        let session_offset_secs = Self::get_ny_seconds_for_session(session, current_date);
 
 
         for i in 0..self.dataset.len() {
@@ -98,6 +95,9 @@ impl SearchEngine {
             if raw_day_candles.is_empty() { continue; }
 
             let candles = Self::maybe_resample(raw_day_candles, timeframe);
+
+            let day_date = Self::decode_naive_ny_date(raw_day_candles[0].timestamp);
+            let session_offset_secs = Self::get_ny_seconds_for_session(session, day_date);
 
             let session_start = match Self::find_session_start(&candles, session_offset_secs) {
                 Some(s) => s,
@@ -171,13 +171,9 @@ impl SearchEngine {
         current_context: &crate::models::Context,
         top_k: usize,
         session: &crate::models::SessionConfig,
-        timestamp: u32,
         valid_dates: Option<&HashSet<u32>>,
     ) -> Vec<crate::models::MatchOutcome> {
         let mut outcomes = Vec::new();
-
-        let current_date = Self::decode_naive_ny_date(timestamp);
-        let session_offset_secs = Self::get_ny_seconds_for_session(session, current_date);
 
         for i in 1..self.dataset.len() {
             let (date_num, candles)       = match self.dataset.get(i)     { Some(d) => d, None => continue };
@@ -187,6 +183,9 @@ impl SearchEngine {
                 if !dates.contains(&date_num) { continue; }
             }
             if candles.is_empty() { continue; }
+            
+            let day_date = Self::decode_naive_ny_date(candles[0].timestamp);
+            let session_offset_secs = Self::get_ny_seconds_for_session(session, day_date);
 
             let session_start = match Self::find_session_start(&candles, session_offset_secs) {
                 Some(s) => s,
@@ -554,5 +553,101 @@ mod session_offset_tests {
         let date = chrono::NaiveDate::from_ymd_opt(2026, 3, 15).unwrap();
         let offset = SearchEngine::get_ny_seconds_for_session(&london_8am(), date);
         assert_eq!(offset, 4 * 3600, "durante il mismatch DST UK/US l'offset deve spostarsi di 1h");
+    }
+}
+
+#[cfg(test)]
+mod dst_mismatch_integration_tests {
+    use super::*;
+    use crate::models::{CandleStore, RawCandle, NormalizedCandle, SessionConfig};
+
+    fn naive_ts(y: i32, m: u32, d: u32, h: u32, min: u32) -> u32 {
+        chrono::NaiveDate::from_ymd_opt(y, m, d)
+            .unwrap()
+            .and_hms_opt(h, min, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp() as u32
+    }
+
+    fn candle(ts: u32, o: f32, h: f32, l: f32, c: f32) -> RawCandle<f32> {
+        RawCandle { timestamp: ts, open: o, high: h, low: l, close: c }
+    }
+
+    fn london_session() -> SessionConfig {
+        SessionConfig {
+            id: "LONDON_OPEN".to_string(),
+            start_time: chrono::NaiveTime::from_hms_opt(8, 0, 0).unwrap(),
+            timezone: "Europe/London".to_string(),
+            duration_secs: None,
+        }
+    }
+
+    /// Dataset con un solo giorno storico: 2008-03-20, nella finestra di
+    /// mismatch DST US/UK (US già in DST dal 9/3, UK non ancora, entra il 30/3).
+    /// L'apertura Londra quel giorno è alle 04:00 NY, NON 03:00 come sarebbe
+    /// in piena estate. Piazzo un pattern chiaramente BEARISH proprio alle
+    /// 04:00/04:10 (l'apertura vera), e un pattern BULLISH alle 03:00/03:10
+    /// (un'ora prima, dove il bug portava erroneamente il match).
+    fn build_dst_mismatch_dataset() -> CandleStore {
+        let mut candles = Vec::new();
+        // 00:00 .. 04:50, ogni 10 minuti (M10) = 30 candele
+        for i in 0..30 {
+            candles.push(candle(naive_ts(2008, 3, 20, 0, 0) + i * 600, 1720.0, 1720.5, 1719.5, 1720.0));
+        }
+        // 03:00 e 03:10 (un'ora PRIMA della vera apertura): pattern bullish,
+        // quello che il bug avrebbe erroneamente scelto come match.
+        candles[18] = candle(naive_ts(2008, 3, 20, 3, 0), 1721.75, 1724.75, 1721.25, 1724.75); // bullish
+        candles[19] = candle(naive_ts(2008, 3, 20, 3, 10), 1724.75, 1728.25, 1724.25, 1728.00); // bullish
+
+        // 04:00 e 04:10 (vera apertura Londra quel giorno): pattern bearish.
+        candles[24] = candle(naive_ts(2008, 3, 20, 4, 0), 1725.50, 1728.75, 1725.00, 1727.50); // bullish
+        candles[25] = candle(naive_ts(2008, 3, 20, 4, 10), 1727.25, 1727.25, 1724.50, 1724.75); // bearish
+
+        let days = vec![(20080320u32, 0..candles.len())];
+        CandleStore { candles, days }
+    }
+
+    #[test]
+    fn get_ny_seconds_for_session_reflects_dst_mismatch_for_historical_day() {
+        // In piena estate (data query) l'offset è 3h.
+        let summer_date = chrono::NaiveDate::from_ymd_opt(2026, 7, 17).unwrap();
+        let summer_offset = SearchEngine::get_ny_seconds_for_session(&london_session(), summer_date);
+        assert_eq!(summer_offset, 3 * 3600);
+
+        // Ma per il giorno storico 2008-03-20 (mismatch DST UK/US) deve essere 4h.
+        let mismatch_date = chrono::NaiveDate::from_ymd_opt(2008, 3, 20).unwrap();
+        let mismatch_offset = SearchEngine::get_ny_seconds_for_session(&london_session(), mismatch_date);
+        assert_eq!(mismatch_offset, 4 * 3600, "durante il mismatch DST l'apertura Londra è 04:00 NY, non 03:00");
+    }
+
+    #[test]
+    fn find_matches_uses_per_day_offset_not_query_date_offset() {
+        let dataset = build_dst_mismatch_dataset();
+        let engine = SearchEngine::new(dataset);
+        let session = london_session();
+
+        // Query "di oggi" (piena estate): pattern chiaramente bullish, M10.
+        let raw_current = vec![
+            candle(naive_ts(2026, 7, 17, 3, 0), 28544.25, 28598.25, 28540.0, 28597.75),
+            candle(naive_ts(2026, 7, 17, 3, 10), 28598.0, 28656.5, 28597.25, 28646.25),
+        ];
+        let baseline = 28544.25;
+        let current_pattern: Vec<NormalizedCandle<f32>> = raw_current
+            .iter()
+            .map(|r| NormalizedCandle::from_raw(r, baseline))
+            .collect();
+
+        let results = engine.find_matches(&current_pattern, 5, &session, 10, None);
+
+        assert!(!results.is_empty());
+        // Il match DEVE provenire dalle 04:00 (vera apertura Londra quel giorno),
+        // MAI dalle 03:00 (che sarebbe l'apertura solo in piena estate, non a marzo 2008).
+        assert_eq!(
+            results[0].timestamp,
+            naive_ts(2008, 3, 20, 4, 0),
+            "il match deve allinearsi all'apertura Londra REALE del giorno storico (04:00), \
+             non all'offset calcolato sulla data della query odierna (03:00)"
+        );
     }
 }
