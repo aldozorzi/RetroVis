@@ -36,7 +36,7 @@ public class RetroVisApiClient : IDisposable
         try
         {
             string json = JsonSerializer.Serialize(request);
-            //RetroVisLog.Info($"RetroVisApiClient POST {url} with request: {json}");
+            RetroVisLog.Info($"RetroVisApiClient POST {url} with request: {json}");
             var content = new StringContent(json, Encoding.UTF8, "application/json");
             var response = await _http.PostAsync(url, content);
 

@@ -28,7 +28,7 @@
       <HintPath>..\..\..\..\..\Quantower\TradingPlatform\v1.146.16\bin\System\System.Drawing.Common.dll</HintPath>
     </Reference>
     <Reference Include="TradingPlatform.BusinessLayer">
-      <HintPath>..\..\..\..\..\Quantower\TradingPlatform\v1.146.16\bin\TradingPlatform.BusinessLayer.dll</HintPath>
+      <HintPath>C:\Quantower\TradingPlatform\v1.146.16\bin\TradingPlatform.BusinessLayer.dll</HintPath>
     </Reference>
   </ItemGroup>
 </Project>

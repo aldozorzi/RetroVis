@@ -174,7 +174,7 @@ public class PanelRenderer
             string dateStr = matchDt.ToString("yyyy-MM-dd");
             areas.Add(new MatchClickArea(rect, dateStr));
 
-            gr.DrawString($"{dateStr} (MATCH:{m.Similarity:F1}%)", this._dataFont, Brushes.Gray, tx, ty);
+            gr.DrawString($"{dateStr} (M:{m.Similarity:F1}%)", this._dataFont, Brushes.Gray, tx, ty);
             ty += 18;
         }
         return ty;

@@ -167,6 +167,60 @@ public class SessionBarReader
         return new PrevDayStats(prevClose, prevHigh, prevLow, found);
     }
 
+    /// <summary>
+    /// Aggregates base-timeframe candles into a higher timeframe by grouping
+    /// on target-TF timestamp boundaries. Uses floor division of the candle
+    /// timestamp by the target duration to assign buckets, which correctly
+    /// handles both multiple and non-multiple relationships (e.g. 10min→15min).
+    /// </summary>
+    /// <param name="candles">Base candles (must be sorted ascending by Timestamp)</param>
+    /// <param name="targetMinutes">Target aggregation duration in minutes</param>
+    /// <returns>Aggregated candles in the target timeframe, sorted ascending</returns>
+    public static List<RawCandle> AggregateCandles(List<RawCandle> candles, int targetMinutes)
+    {
+        if (candles == null || candles.Count == 0)
+            return [];
+
+        uint targetSeconds = (uint)targetMinutes * 60;
+        var result = new List<RawCandle>();
+
+        int i = 0;
+        while (i < candles.Count)
+        {
+            uint bucket = candles[i].Timestamp / targetSeconds;
+            uint bucketStart = bucket * targetSeconds;
+
+            float open = candles[i].Open;
+            float high = candles[i].High;
+            float low = candles[i].Low;
+            float close = candles[i].Close;
+            float volume = candles[i].Volume;
+            i++;
+
+            while (i < candles.Count && (candles[i].Timestamp / targetSeconds) == bucket)
+            {
+                var c = candles[i];
+                if (c.High > high) high = c.High;
+                if (c.Low < low) low = c.Low;
+                close = c.Close;
+                volume += c.Volume;
+                i++;
+            }
+
+            result.Add(new RawCandle
+            {
+                Timestamp = bucketStart,
+                Open = open,
+                High = high,
+                Low = low,
+                Close = close,
+                Volume = volume
+            });
+        }
+
+        return result;
+    }
+
     private static DateTime PrevTradingDayAt(DateTime reference, int hour, int minute)
     {
         DateTime prevDate = PrevTradingDay(reference);

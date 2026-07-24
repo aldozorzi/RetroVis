@@ -63,12 +63,13 @@ public class RetroVis : Indicator
     private RetroVisApiClient _apiClient;
     private SessionBarReader _barReader;
     private readonly PanelRenderer _panelRenderer = new();
+    private readonly MultiTimeframePanelRenderer _multiTfRenderer = new();
 
     private AggregateData _candlesSummary = new();
     private NextCandleData _nextCandle = new();
     private List<MatchResponse> _candlesResults = [];
     private bool _isPanelVisible = true;
-    private readonly Rectangle _toggleRect = new(5, 80, 120, 25);
+    private readonly Rectangle _toggleRect = new(5, 50, 120, 25);
     private int _openBarIndex = -1;
     private double _currentPriceBase = 0;
     private DateTime _lastProcessedBarTime;
@@ -97,16 +98,25 @@ public class RetroVis : Indicator
     private int _lastPanelHeight = 0;
 
     private bool _isBacktestMode = false;
-    private readonly Rectangle _backtestBtnRect = new(130, 80, 130, 25);
+    private readonly Rectangle _backtestBtnRect = new(130, 50, 130, 25);
 
     private string _currentAnalysisText;
 
     private int _analysisIndex;
 
-    // Blinking circle state
-    private bool _alertEdgePositive;
-    private static readonly TimeSpan BlinkDuration = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan BlinkInterval = TimeSpan.FromMilliseconds(300);
+    // Multi-timeframe panel fields
+    private static readonly Dictionary<string, string[]> HigherTimeframes = new()
+    {
+        ["M5"]  = ["M10", "M15"],
+        ["M10"] = ["M15", "M30"],
+        ["M15"] = ["M30"]
+    };
+
+    private string _currentTimeframe;
+    private string[] _higherTfs = [];
+    private string _selectedTimeframe;
+    private readonly Dictionary<string, HigherTfState> _higherTfStates = [];
+    private List<TfClickArea> _multiTfClickAreas = [];
     #endregion
 
     public RetroVis() : base()
@@ -114,6 +124,19 @@ public class RetroVis : Indicator
         this.Name = "RetroVis";
         this.SeparateWindow = false;
     }
+
+    private string CurrentTimeframe =>
+        this._currentTimeframe ??= this.GetFormattedTimeframe();
+
+    /// <summary>
+    /// Carries the search results and tracking state for one higher timeframe.
+    /// </summary>
+    private sealed record HigherTfState(
+        AggregateData Summary,
+        NextCandleData NextCandle,
+        long LastProcessedCandleIndex,
+        bool IsLoading
+    );
 
     protected override void OnInit()
     {
@@ -148,6 +171,9 @@ public class RetroVis : Indicator
 
         this.InitTicker();
 
+        this._currentTimeframe = this.GetFormattedTimeframe();
+        this._selectedTimeframe = this._currentTimeframe;
+        this._higherTfs = HigherTimeframes.TryGetValue(this._currentTimeframe, out var higher) ? higher : [];
 
     }
 
@@ -167,6 +193,10 @@ public class RetroVis : Indicator
         this._currentCandleCount = 0;
         this._lastContextSessionDate = "";
         this._currentAnalysisText = "Loading new Analysis...";
+
+        // Reset higher-TF state (preserve the dictionary keys, clear results)
+        this._higherTfStates.Clear();
+        this._multiTfClickAreas.Clear();
     }
 
     protected override void OnSettingsUpdated()
@@ -220,6 +250,7 @@ public class RetroVis : Indicator
                     return;
                     
                 this.ProcessAnalysis(0);
+                this.CheckHigherTimeframes(currentBarTime);
             }
             
             // Check for auto order conditions ONLY on new candle formation, not on chart changes
@@ -300,6 +331,157 @@ public class RetroVis : Indicator
         this._contextSummary = fullData.Summary;
     }
 
+    /// <summary>
+    /// Called on every new base candle. Checks whether any higher timeframe
+    /// had a candle change (using timestamp floor division) and triggers
+    /// a search for each changed timeframe.
+    /// </summary>
+    private void CheckHigherTimeframes(DateTime currentBarTime)
+    {
+        if (this._higherTfs.Length == 0 || this._openBarIndex == -1 || this._effectiveSession == null)
+            return;
+
+        uint currentTimestamp = (uint)new DateTimeOffset(currentBarTime.ToUniversalTime()).ToUnixTimeSeconds();
+
+        foreach (string tf in this._higherTfs)
+        {
+            int tfMinutes = ParseTfMinutes(tf);
+            if (tfMinutes <= 0) continue;
+
+            long tfSeconds = tfMinutes * 60L;
+            long tfIndex = currentTimestamp / tfSeconds;
+
+            bool exists = this._higherTfStates.TryGetValue(tf, out var state);
+            if (!exists || tfIndex != state.LastProcessedCandleIndex)
+            {
+                // Candle boundary crossed — trigger search
+                this._higherTfStates[tf] = new HigherTfState(
+                    new AggregateData(), new NextCandleData(),
+                    tfIndex, IsLoading: true);
+                _ = this.FetchHigherTfMatchesAsync(tf);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Returns the duration in minutes for a formatted timeframe string (e.g. "M10" -> 10).
+    /// </summary>
+    private static int ParseTfMinutes(string tf)
+    {
+        if (tf.Length > 1 && tf[0] == 'M' && int.TryParse(tf[1..], out int minutes))
+            return minutes;
+        return 0;
+    }
+
+    /// <summary>
+    /// Fetches search results for a higher timeframe. Pre-aggregates base candles
+    /// into the target timeframe before sending to the server.
+    /// </summary>
+    private async Task FetchHigherTfMatchesAsync(string targetTf)
+    {
+        try
+        {
+            int targetMinutes = ParseTfMinutes(targetTf);
+            if (targetMinutes <= 0) return;
+
+            // Extract base candles from session open to current bar
+            var baseCandles = this._barReader.ExtractCandles(this._openBarIndex, this._analysisIndex, this.MaxCandles);
+            if (baseCandles.Count == 0) return;
+
+            // Pre-aggregate into target timeframe
+            var aggregatedCandles = SessionBarReader.AggregateCandles(baseCandles, targetMinutes);
+
+            // Drop the last bucket if it's incomplete (the last base candle closed before the bucket ended)
+            if (aggregatedCandles.Count > 0 && baseCandles.Count > 0)
+            {
+                uint baseTfSeconds = (uint)ParseTfMinutes(this._currentTimeframe) * 60;
+                uint targetTfSeconds = (uint)targetMinutes * 60;
+                uint lastBucketEnd = aggregatedCandles[^1].Timestamp + targetTfSeconds;
+                uint lastBaseCandleEnd = baseCandles[^1].Timestamp + baseTfSeconds;
+                if (lastBaseCandleEnd < lastBucketEnd)
+                {
+                    aggregatedCandles.RemoveAt(aggregatedCandles.Count - 1);
+                }
+            }
+
+            // Apply MinCandles filter on aggregated count
+            if (aggregatedCandles.Count < this.MinCandles)
+            {
+                this._higherTfStates[targetTf] = this._higherTfStates[targetTf] with { IsLoading = false };
+                return;
+            }
+
+            float sessionOpen = (float)this.Open(this._openBarIndex);
+            uint timestamp = aggregatedCandles[^1].Timestamp;
+
+            var request = new QueryRequest
+            {
+                Symbol = this._ticker,
+                SessionId = this._effectiveSession,
+                Candles = aggregatedCandles,
+                TopK = 5,
+                Timestamp = timestamp,
+                Timeframe = targetTf,
+                SessionOpen = sessionOpen
+            };
+
+            var fullData = await this._apiClient.FetchMatchesAsync(request);
+            if (fullData == null) return;
+
+            this._higherTfStates[targetTf] = new HigherTfState(
+                fullData.Summary ?? new AggregateData(),
+                fullData.NextCandle ?? new NextCandleData(),
+                this._higherTfStates[targetTf].LastProcessedCandleIndex,
+                IsLoading: false);
+        }
+        catch (Exception ex)
+        {
+            RetroVisLog.Error($"FetchHigherTfMatchesAsync ({targetTf}) error: {ex.Message}");
+            if (this._higherTfStates.TryGetValue(targetTf, out var st))
+                this._higherTfStates[targetTf] = st with { IsLoading = false };
+        }
+    }
+
+    /// <summary>
+    /// Retrieves AggregateData and NextCandleData for any timeframe
+    /// (current or higher). Used by level-drawing methods.
+    /// </summary>
+    private (AggregateData Summary, NextCandleData NextCandle) GetDataForTimeframe(string tf)
+    {
+        if (tf == this._currentTimeframe || !this._higherTfStates.TryGetValue(tf, out var state))
+            return (this._candlesSummary, this._nextCandle);
+        return (state.Summary, state.NextCandle);
+    }
+
+    /// <summary>
+    /// Builds the ordered list of display data for the multi-timeframe panel.
+    /// Current timeframe first, then higher TFs.
+    /// </summary>
+    private List<HigherTfDisplayData> BuildPanelData()
+    {
+        var list = new List<HigherTfDisplayData>();
+
+        // Current timeframe always included
+        list.Add(new HigherTfDisplayData(
+            this._currentTimeframe,
+            this._candlesSummary,
+            this._nextCandle));
+
+        // Add higher timeframes that have data
+        foreach (string tf in this._higherTfs)
+        {
+            if (this._higherTfStates.TryGetValue(tf, out var state) && !state.IsLoading)
+            {
+                list.Add(new HigherTfDisplayData(
+                    tf,
+                    state.Summary,
+                    state.NextCandle));
+            }
+        }
+
+        return list;
+    }
+
     public override void OnPaintChart(PaintChartEventArgs args)
     {
         try
@@ -311,6 +493,14 @@ public class RetroVis : Indicator
             {
                 this.DrawLevelsOnChart(gr);
                 this.DrawResultsPanelOnChart(gr);
+
+                // Draw multi-timeframe panel (replaces old single alert circle)
+                var chartRect = this.CurrentChart.MainWindow.ClientRectangle;
+                var panelData = this.BuildPanelData();
+                var multiTfResult = this._multiTfRenderer.DrawMultiTimeframePanel(
+                    gr, chartRect, panelData, this._selectedTimeframe);
+                this._multiTfClickAreas = [.. multiTfResult.ClickAreas];
+
                 if (this.SelectedAccount != null)
                     this._panelRenderer.DrawOrderButtons(gr, this.GetLongButtonRect(), this.GetShortButtonRect());
             }
@@ -350,27 +540,40 @@ public class RetroVis : Indicator
     /// </summary>
     private (double Up, double Down) GetNextCandleLevels()
     {
+        return GetNextCandleLevelsFor(this._selectedTimeframe);
+    }
+
+    private (double Up, double Down) GetNextCandleLevelsFor(string tf)
+    {
         int baseCandleIndex = this._analysisIndex + 1;
         if (this.MaxCandles > 0 && (this._openBarIndex - baseCandleIndex) >= this.MaxCandles)
             baseCandleIndex = this._openBarIndex - this.MaxCandles + 1;
         baseCandleIndex = Math.Clamp(baseCandleIndex, 0, Math.Max(0, this.Count - 1));
 
+        var (_, nextCandle) = this.GetDataForTimeframe(tf);
         double nextCandleClose = this.Close(baseCandleIndex);
-        return (nextCandleClose + this._nextCandle.AvgUp, nextCandleClose - this._nextCandle.AvgDown);
+        return (nextCandleClose + nextCandle.AvgUp, nextCandleClose - nextCandle.AvgDown);
     }
 
     /// <summary>
     /// Same session-level calculation used for drawing the solid lines.
+    /// Uses the currently selected timeframe's aggregated data.
     /// </summary>
     private (double Up, double Down) GetSessionLevels()
-        {
-            int baseCandleIndex = this._analysisIndex + 1;
-            if (this.MaxCandles > 0 && (this._openBarIndex - baseCandleIndex) >= this.MaxCandles)
-                baseCandleIndex = this._openBarIndex - this.MaxCandles + 1;
-                baseCandleIndex = Math.Clamp(baseCandleIndex, 0, Math.Max(0, this.Count - 1));
+    {
+        return GetSessionLevelsFor(this._selectedTimeframe);
+    }
 
-            double _currentPriceBase = this.Close(baseCandleIndex);
-            return (_currentPriceBase + this._candlesSummary.AvgUp, _currentPriceBase - this._candlesSummary.AvgDown);
+    private (double Up, double Down) GetSessionLevelsFor(string tf)
+    {
+        int baseCandleIndex = this._analysisIndex + 1;
+        if (this.MaxCandles > 0 && (this._openBarIndex - baseCandleIndex) >= this.MaxCandles)
+            baseCandleIndex = this._openBarIndex - this.MaxCandles + 1;
+        baseCandleIndex = Math.Clamp(baseCandleIndex, 0, Math.Max(0, this.Count - 1));
+
+        double priceBase = this.Close(baseCandleIndex);
+        var (summary, _) = this.GetDataForTimeframe(tf);
+        return (priceBase + summary.AvgUp, priceBase - summary.AvgDown);
     }
 
     /// <summary>
@@ -384,15 +587,6 @@ public class RetroVis : Indicator
 
     private void DrawResultsPanelOnChart(Graphics gr)
     {
-        var sessionUp = this._candlesSummary.AvgUp > this._candlesSummary.AvgDown;
-        var candleUp = this._nextCandle.AvgUp > this._nextCandle.AvgDown;
-        if (this._candlesSummary.Confidence >= 70f && this._nextCandle.Confidence >= 70f && sessionUp == candleUp)
-        {
-            var chartRect = this.CurrentChart.MainWindow.ClientRectangle;
-            this._alertEdgePositive = this._candlesSummary.AvgUp > Math.Abs(this._candlesSummary.AvgDown);
-            PanelRenderer.DrawAlertCircle(gr, chartRect, this._alertEdgePositive);
-        }
-
         // Calculate position sizes for display
         double currentPrice = this.Symbol.Last;
         var (levelUp, levelDown) = this.GetOrderTpLevels();
@@ -441,6 +635,16 @@ public class RetroVis : Indicator
 
     private void OnChartMouseUp(object sender, ChartMouseNativeEventArgs e)
     {
+        // Check multi-timeframe panel circle clicks
+        foreach (var area in this._multiTfClickAreas)
+        {
+            if (area.Rect.Contains(e.Location))
+            {
+                this._selectedTimeframe = area.Timeframe;
+                return;
+            }
+        }
+
         Rectangle longRect = this.SelectedAccount != null ? this.GetLongButtonRect() : Rectangle.Empty;
         Rectangle shortRect = this.SelectedAccount != null ? this.GetShortButtonRect() : Rectangle.Empty;
 
@@ -487,6 +691,12 @@ public class RetroVis : Indicator
     {
         this.Reset();
         this.ProcessAnalysis(candleIndex);
+        // Also fetch higher-TF data for the manually selected candle
+        if (this._openBarIndex != -1)
+        {
+            DateTime candleTime = this.Time(this._analysisIndex);
+            this.CheckHigherTimeframes(candleTime);
+        }
     }
 
     private void ProcessAnalysis(int refIndex)
@@ -543,6 +753,8 @@ public class RetroVis : Indicator
         this._alertService?.Dispose();
         this._apiClient?.Dispose();
         this._autoOrderService?.Dispose();
+        this._multiTfRenderer?.Dispose();
+        this._higherTfStates.Clear();
         GC.SuppressFinalize(this);
     }
 

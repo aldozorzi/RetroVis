@@ -17,6 +17,7 @@ public class CloseAlertService(HistoricalData data)
     private SoundPlayer _player;
     private string _loadedPath = "";
     private static DateTime _lastAlertBarTime = DateTime.MinValue;
+    private static DateTime _lastAlertPlayTime = DateTime.MinValue;
 
     public void LoadSound(string path)
     {
@@ -69,7 +70,13 @@ public class CloseAlertService(HistoricalData data)
 
         if (secondsRemaining > 0 && secondsRemaining <= secondsBeforeClose)
         {
+            // Cooldown: prevent multiple plays within the same second
+            DateTime now = DateTime.UtcNow;
+            if ((now - _lastAlertPlayTime).TotalSeconds < 1.0)
+                return;
+
             CloseAlertService._lastAlertBarTime = currentBarTime;
+            CloseAlertService._lastAlertPlayTime = now;
             try { this._player.Play(); }
             catch (Exception ex) { RetroVisLog.Error("Errore riproduzione alert sound: " + ex.Message); }
         }
