@@ -89,8 +89,10 @@ public class MultiTimeframePanelRenderer : IDisposable
             Brush sessionBrush = EdgeBrushFor(sessionConf, avgUp, avgDown);
             Brush nextBrush = EdgeBrushFor(nextConf, nextAvgUp, nextAvgDown);
 
-            string sessionText = $"S:{sessionConf:F0}%";
-            string nextText = $"N:{nextConf:F0}%";
+            string sessionArrow = avgUp > Math.Abs(avgDown) ? "↑" : "↓";
+            string nextArrow = nextAvgUp > Math.Abs(nextAvgDown) ? "↑" : "↓";
+            string sessionText = $"S:{sessionArrow}{sessionConf:F0}%";
+            string nextText = $"N:{nextArrow}{nextConf:F0}%";
 
             int labelY = currentY + LabelTopPadding;
             int labelCenterX = panelX + PanelWidth / 2;

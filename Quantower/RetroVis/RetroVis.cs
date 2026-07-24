@@ -250,8 +250,12 @@ public class RetroVis : Indicator
                     return;
                     
                 this.ProcessAnalysis(0);
-                this.CheckHigherTimeframes(currentBarTime);
             }
+
+            // Check higher-TF bucket boundaries on every tick using wall-clock time.
+            // This detects M15 completion at e.g. 10:15 even on a 10-min chart
+            // where the base bar (10:10-10:20) hasn't changed yet.
+            this.CheckHigherTimeframes(currentBarTime);
             
             // Check for auto order conditions ONLY on new candle formation, not on chart changes
             if (this.EnableAutoOrders && !this._isBacktestMode && isNewCandle && this._candlesResults.Count > 0 && this._nextCandle.Confidence > 0)
@@ -341,7 +345,7 @@ public class RetroVis : Indicator
         if (this._higherTfs.Length == 0 || this._openBarIndex == -1 || this._effectiveSession == null)
             return;
 
-        uint currentTimestamp = (uint)new DateTimeOffset(currentBarTime.ToUniversalTime()).ToUnixTimeSeconds();
+        uint currentTimestamp = (uint)DateTime.UtcNow.Subtract(new DateTime(1970, 1, 1)).TotalSeconds;
 
         foreach (string tf in this._higherTfs)
         {
@@ -387,6 +391,28 @@ public class RetroVis : Indicator
             // Extract base candles from session open to current bar
             var baseCandles = this._barReader.ExtractCandles(this._openBarIndex, this._analysisIndex, this.MaxCandles);
             if (baseCandles.Count == 0) return;
+
+            // For real-time higher-TF aggregation, include the current (open) bar
+            // so the last aggregated bucket has a valid close price at bucket boundaries
+            // (e.g., M15 close at 10:15 on a 10-min chart).
+            // Convert using BarTimeNy convention: bar UTC → NY time → treat as UTC.
+            if (!this._isBacktestMode && this.Count > 0)
+            {
+                TimeZoneInfo nyTz = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+                DateTime barUtc = this.Time(0).ToUniversalTime();
+                DateTime barNy = TimeZoneInfo.ConvertTimeFromUtc(barUtc, nyTz);
+                uint tsNy = (uint)new DateTimeOffset(barNy, TimeSpan.Zero).ToUnixTimeSeconds();
+
+                baseCandles.Add(new RawCandle
+                {
+                    Timestamp = tsNy,
+                    Open = (float)this.Open(0),
+                    High = (float)this.High(0),
+                    Low = (float)this.Low(0),
+                    Close = (float)this.Close(0),
+                    Volume = Math.Max((float)this.Volume(0), 0f)
+                });
+            }
 
             // Pre-aggregate into target timeframe
             var aggregatedCandles = SessionBarReader.AggregateCandles(baseCandles, targetMinutes);
@@ -582,8 +608,8 @@ public class RetroVis : Indicator
     private (double Up, double Down) GetOrderTpLevels() =>
         this.OrderTpSource == "Session" ? this.GetSessionLevels() : this.GetNextCandleLevels();
 
-    private Rectangle GetLongButtonRect() => new(this._toggleRect.X, this._toggleRect.Y + 35 + this._lastPanelHeight + 10, 160, 30);
-    private Rectangle GetShortButtonRect() => new(this._toggleRect.X + 170, this._toggleRect.Y + 35 + this._lastPanelHeight + 10, 160, 30);
+    private Rectangle GetLongButtonRect() => new(this._toggleRect.X, this._toggleRect.Y + 35 + this._lastPanelHeight + 10, 135, 30);
+    private Rectangle GetShortButtonRect() => new(this._toggleRect.X + 145, this._toggleRect.Y + 35 + this._lastPanelHeight + 10, 135, 30);
 
     private void DrawResultsPanelOnChart(Graphics gr)
     {
@@ -621,7 +647,7 @@ public class RetroVis : Indicator
         );
 
         Point origin = new(this._toggleRect.X, this._toggleRect.Y + 35);
-        var result = this._panelRenderer.DrawResultsPanel(gr, origin, 330, this._lastPanelHeight, state);
+        var result = this._panelRenderer.DrawResultsPanel(gr, origin, 280, this._lastPanelHeight, state);
 
         this._lastPanelHeight = result.PanelHeight;
         this._matchAreas = [.. result.MatchAreas];

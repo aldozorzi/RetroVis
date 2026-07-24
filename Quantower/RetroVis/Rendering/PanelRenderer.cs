@@ -88,8 +88,8 @@ public class PanelRenderer
         {
             bool isLongBias = state.NextCandle.AvgUp > Math.Abs(state.NextCandle.AvgDown);
             positionText = isLongBias 
-                ? $" SIZE: L:{state.PositionSizeLong:F0}"
-                : $" SIZE: S:{state.PositionSizeShort:F0}";
+                ? $" S:{state.PositionSizeLong:F0}"
+                : $" S:{state.PositionSizeShort:F0}";
         }
         Brush positionBrush = Brushes.Orange;
 
@@ -148,10 +148,10 @@ public class PanelRenderer
             Rectangle ctxSummaryRect = new(tx, ty, panelRect.Width - 24, 25);
             gr.DrawRectangle(Pens.DimGray, ctxSummaryRect);
 
-            string ctxSummaryText = $"SESS U:+{state.ContextSummary.AvgUp:F1} | D:-{state.ContextSummary.AvgDown:F1} | ";
+            string ctxSummaryText = $"SESS ↑{state.ContextSummary.AvgUp:F1} ↓{state.ContextSummary.AvgDown:F1} | ";
             gr.DrawString(ctxSummaryText, this._dataFont, Brushes.LightGray, tx + 5, ty + 5);
             float ctxSummaryWidth = gr.MeasureString(ctxSummaryText, this._dataFont).Width;
-            string ctxEdgeText = $"E: {(Math.Abs(state.ContextSummary.AvgDown) > state.ContextSummary.AvgUp ? "-" : "+")}{state.ContextSummary.EdgeRatio:F2} ({state.ContextSummary.Confidence:F1}%)";
+            string ctxEdgeText = $"E:{(Math.Abs(state.ContextSummary.AvgDown) > state.ContextSummary.AvgUp ? "↓" : "↑")}{state.ContextSummary.EdgeRatio:F2} ({state.ContextSummary.Confidence:F1}%)";
             gr.DrawString(ctxEdgeText, this._dataFont, ctxEdgeBrush, tx + 5 + ctxSummaryWidth, ty + 5);
 
             ty += 35;
@@ -189,10 +189,10 @@ public class PanelRenderer
         }
 
         Brush edgeBrush = EdgeBrushFor(confidence, avgUp, avgDown);
-        string summaryText = $"{label} U:+{avgUp:F1} | D:-{avgDown:F1} | ";
+        string summaryText = $"{label} ↑{avgUp:F1} ↓{avgDown:F1} | ";
         gr.DrawString(summaryText, this._dataFont, Brushes.White, tx + 5, ty + 5);
         float summaryWidth = gr.MeasureString(summaryText, this._dataFont).Width;
-        string edgeText = $"E:{(Math.Abs(avgDown) > avgUp ? "-" : "+")}{edgeRatio:F2} ({confidence:F1}%)";
+        string edgeText = $"E:{(Math.Abs(avgDown) > avgUp ? "↓" : "↑")}{edgeRatio:F2} ({confidence:F1}%)";
         gr.DrawString(edgeText, this._dataFont, edgeBrush, tx + 5 + summaryWidth, ty + 5);
 
         return ty + (withBorder ? 24 : 30);
