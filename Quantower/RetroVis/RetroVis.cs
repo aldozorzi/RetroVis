@@ -194,8 +194,9 @@ public class RetroVis : Indicator
         this._lastContextSessionDate = "";
         this._currentAnalysisText = "Loading new Analysis...";
 
-        // Reset higher-TF state (preserve the dictionary keys, clear results)
-        this._higherTfStates.Clear();
+        // Preserve higher-TF data across new candles — the data remains
+        // valid until the next higher-TF bucket boundary triggers a fresh
+        // fetch. Only clear click areas so stale rectangles don't persist.
         this._multiTfClickAreas.Clear();
     }
 
@@ -388,14 +389,19 @@ public class RetroVis : Indicator
             int targetMinutes = ParseTfMinutes(targetTf);
             if (targetMinutes <= 0) return;
 
-            // Extract base candles from session open to current bar
-            var baseCandles = this._barReader.ExtractCandles(this._openBarIndex, this._analysisIndex, this.MaxCandles);
+            // Extract the most recent closed candles for aggregation.
+            // We want the newest MaxCandles candles (not from session open)
+            // so the aggregated higher-TF buckets cover the latest data.
+            int firstIndex = Math.Min(this._openBarIndex, this._analysisIndex + this.MaxCandles);
+            var baseCandles = this._barReader.ExtractCandles(firstIndex, this._analysisIndex, this.MaxCandles);
             if (baseCandles.Count == 0) return;
 
-            // For real-time higher-TF aggregation, include the current (open) bar
-            // so the last aggregated bucket has a valid close price at bucket boundaries
-            // (e.g., M15 close at 10:15 on a 10-min chart).
-            // Convert using BarTimeNy convention: bar UTC → NY time → treat as UTC.
+            // Include the current (open) bar so the last higher-TF bucket
+            // is complete at boundary times (e.g. M15 at 10:15 on a M10
+            // chart). The first tick after the boundary snapshots the
+            // current bar's OHLC — the close is the price at that instant,
+            // which is the correct bucket close.  After this single fetch
+            // completes, the data stays stable until the next boundary.
             if (!this._isBacktestMode && this.Count > 0)
             {
                 TimeZoneInfo nyTz = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
@@ -417,25 +423,49 @@ public class RetroVis : Indicator
             // Pre-aggregate into target timeframe
             var aggregatedCandles = SessionBarReader.AggregateCandles(baseCandles, targetMinutes);
 
-            // Drop the last bucket if it's incomplete (the last base candle closed before the bucket ended)
-            if (aggregatedCandles.Count > 0 && baseCandles.Count > 0)
+            // Determine last-bucket completeness using wall-clock time.
+            // With the current (open) bar appended, the old end-time check
+            // incorrectly PASSES at non-boundary times because the open
+            // bar's nominal end time always spans the bucket.
+            //
+            // Instead we check whether the target-TF bucket end has truly
+            // passed in real wall-clock time, using the same NY-as-UTC
+            // convention as BarTimeNy so the comparison is aligned.
+            if (aggregatedCandles.Count > 0)
             {
-                uint baseTfSeconds = (uint)ParseTfMinutes(this._currentTimeframe) * 60;
                 uint targetTfSeconds = (uint)targetMinutes * 60;
                 uint lastBucketEnd = aggregatedCandles[^1].Timestamp + targetTfSeconds;
-                uint lastBaseCandleEnd = baseCandles[^1].Timestamp + baseTfSeconds;
-                if (lastBaseCandleEnd < lastBucketEnd)
+
+                bool drop = false;
+                if (this._isBacktestMode)
                 {
-                    aggregatedCandles.RemoveAt(aggregatedCandles.Count - 1);
+                    // Backtest: no current-bar was appended, all candles
+                    // are closed → classic end-time check.
+                    uint baseTfSeconds = (uint)ParseTfMinutes(this._currentTimeframe) * 60;
+                    uint lastBaseCandleEnd = baseCandles[^1].Timestamp + baseTfSeconds;
+                    drop = lastBaseCandleEnd < lastBucketEnd;
                 }
+                else
+                {
+                    // Real-time: frame is complete only when wall-clock
+                    // has passed the bucket's end.  Use the same NY-as-UTC
+                    // conversion as BarTimeNy for alignment.
+                    TimeZoneInfo nyTz = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+                    DateTime nowUtc = DateTime.UtcNow;
+                    DateTime nowNy = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, nyTz);
+                    uint shiftedNow = (uint)new DateTimeOffset(nowNy, TimeSpan.Zero).ToUnixTimeSeconds();
+                    drop = shiftedNow < lastBucketEnd;
+                }
+
+                if (drop)
+                    aggregatedCandles.RemoveAt(aggregatedCandles.Count - 1);
             }
 
-            // Apply MinCandles filter on aggregated count
-            if (aggregatedCandles.Count < this.MinCandles)
-            {
-                this._higherTfStates[targetTf] = this._higherTfStates[targetTf] with { IsLoading = false };
-                return;
-            }
+            // MinCandles is not applied here: higher-TF aggregation only
+            // produces complete buckets (the incomplete-bucket check above
+            // already drops partial ones), so any count is valid to send.
+
+            if (aggregatedCandles.Count == 0) return;
 
             float sessionOpen = (float)this.Open(this._openBarIndex);
             uint timestamp = aggregatedCandles[^1].Timestamp;
@@ -493,7 +523,7 @@ public class RetroVis : Indicator
             this._candlesSummary,
             this._nextCandle));
 
-        // Add higher timeframes that have data
+        // Add higher timeframes that have completed their fetch
         foreach (string tf in this._higherTfs)
         {
             if (this._higherTfStates.TryGetValue(tf, out var state) && !state.IsLoading)
