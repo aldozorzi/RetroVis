@@ -131,9 +131,10 @@ public class RetroVis : Indicator
     /// <summary>
     /// Carries the search results and tracking state for one higher timeframe.
     /// </summary>
-    private sealed record HigherTfState(
+        private sealed record HigherTfState(
         AggregateData Summary,
         NextCandleData NextCandle,
+        float LastClose,
         long LastProcessedCandleIndex,
         bool IsLoading
     );
@@ -360,8 +361,9 @@ public class RetroVis : Indicator
             if (!exists || tfIndex != state.LastProcessedCandleIndex)
             {
                 // Candle boundary crossed — trigger search
+                float prevClose = state?.LastClose ?? 0f;
                 this._higherTfStates[tf] = new HigherTfState(
-                    new AggregateData(), new NextCandleData(),
+                    new AggregateData(), new NextCandleData(), prevClose,
                     tfIndex, IsLoading: true);
                 _ = this.FetchHigherTfMatchesAsync(tf);
             }
@@ -484,15 +486,20 @@ public class RetroVis : Indicator
             var fullData = await this._apiClient.FetchMatchesAsync(request);
             if (fullData == null) return;
 
+            float lastAggClose = aggregatedCandles.Count > 0
+                ? aggregatedCandles[^1].Close
+                : 0f;
             this._higherTfStates[targetTf] = new HigherTfState(
                 fullData.Summary ?? new AggregateData(),
                 fullData.NextCandle ?? new NextCandleData(),
+                lastAggClose,
                 this._higherTfStates[targetTf].LastProcessedCandleIndex,
                 IsLoading: false);
         }
         catch (Exception ex)
         {
             RetroVisLog.Error($"FetchHigherTfMatchesAsync ({targetTf}) error: {ex.Message}");
+            // On error, preserve existing data including LastClose.
             if (this._higherTfStates.TryGetValue(targetTf, out var st))
                 this._higherTfStates[targetTf] = st with { IsLoading = false };
         }
@@ -601,14 +608,25 @@ public class RetroVis : Indicator
 
     private (double Up, double Down) GetNextCandleLevelsFor(string tf)
     {
-        int baseCandleIndex = this._analysisIndex + 1;
-        if (this.MaxCandles > 0 && (this._openBarIndex - baseCandleIndex) >= this.MaxCandles)
-            baseCandleIndex = this._openBarIndex - this.MaxCandles + 1;
-        baseCandleIndex = Math.Clamp(baseCandleIndex, 0, Math.Max(0, this.Count - 1));
+        // For the current timeframe, use the closed-bar price as the anchor.
+        // For higher timeframes, use the last aggregated bucket's close.
+        if (tf == this._currentTimeframe || !this._higherTfStates.TryGetValue(tf, out var state))
+        {
+            int baseCandleIndex = this._analysisIndex + 1;
+            if (this.MaxCandles > 0 && (this._openBarIndex - baseCandleIndex) >= this.MaxCandles)
+                baseCandleIndex = this._openBarIndex - this.MaxCandles + 1;
+            baseCandleIndex = Math.Clamp(baseCandleIndex, 0, Math.Max(0, this.Count - 1));
 
-        var (_, nextCandle) = this.GetDataForTimeframe(tf);
-        double nextCandleClose = this.Close(baseCandleIndex);
-        return (nextCandleClose + nextCandle.AvgUp, nextCandleClose - nextCandle.AvgDown);
+            var (_, nextCandle) = this.GetDataForTimeframe(tf);
+            double nextCandleClose = this.Close(baseCandleIndex);
+            return (nextCandleClose + nextCandle.AvgUp, nextCandleClose - nextCandle.AvgDown);
+        }
+        else
+        {
+            // Higher timeframe: anchor on the aggregated bucket's own close.
+            double close = state.LastClose;
+            return (close + state.NextCandle.AvgUp, close - state.NextCandle.AvgDown);
+        }
     }
 
     /// <summary>
@@ -622,14 +640,25 @@ public class RetroVis : Indicator
 
     private (double Up, double Down) GetSessionLevelsFor(string tf)
     {
-        int baseCandleIndex = this._analysisIndex + 1;
-        if (this.MaxCandles > 0 && (this._openBarIndex - baseCandleIndex) >= this.MaxCandles)
-            baseCandleIndex = this._openBarIndex - this.MaxCandles + 1;
-        baseCandleIndex = Math.Clamp(baseCandleIndex, 0, Math.Max(0, this.Count - 1));
+        // For the current timeframe, use the closed-bar price as the anchor.
+        // For higher timeframes, use the last aggregated bucket's close.
+        if (tf == this._currentTimeframe || !this._higherTfStates.TryGetValue(tf, out var state))
+        {
+            int baseCandleIndex = this._analysisIndex + 1;
+            if (this.MaxCandles > 0 && (this._openBarIndex - baseCandleIndex) >= this.MaxCandles)
+                baseCandleIndex = this._openBarIndex - this.MaxCandles + 1;
+            baseCandleIndex = Math.Clamp(baseCandleIndex, 0, Math.Max(0, this.Count - 1));
 
-        double priceBase = this.Close(baseCandleIndex);
-        var (summary, _) = this.GetDataForTimeframe(tf);
-        return (priceBase + summary.AvgUp, priceBase - summary.AvgDown);
+            double priceBase = this.Close(baseCandleIndex);
+            var (summary, _) = this.GetDataForTimeframe(tf);
+            return (priceBase + summary.AvgUp, priceBase - summary.AvgDown);
+        }
+        else
+        {
+            // Higher timeframe: anchor on the aggregated bucket's own close.
+            double close = state.LastClose;
+            return (close + state.Summary.AvgUp, close - state.Summary.AvgDown);
+        }
     }
 
     /// <summary>
