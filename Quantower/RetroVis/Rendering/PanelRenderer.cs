@@ -88,7 +88,7 @@ public class PanelRenderer
         {
             bool isLongBias = state.NextCandle.AvgUp > Math.Abs(state.NextCandle.AvgDown);
             positionText = isLongBias 
-                ? $" S:{state.PositionSizeLong:F0}"
+                ? $" L:{state.PositionSizeLong:F0}"
                 : $" S:{state.PositionSizeShort:F0}";
         }
         Brush positionBrush = Brushes.Orange;
