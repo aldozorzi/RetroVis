@@ -135,7 +135,7 @@ public class PanelRenderer
             ty = this.DrawSummaryRow(gr, tx, ty, panelRect.Width, "NXT", state.NextCandle.AvgUp, state.NextCandle.AvgDown, state.NextCandle.EdgeRatio, state.NextCandle.Confidence, withBorder: false);
             ty += 6;
 
-            ty = this.DrawMatchRows(gr, tx, ty, panelRect.Width, state.CandlesResults, matchAreas);
+            ty = this.DrawMatchRows(gr, tx, ty, panelRect.Width, state.CandlesResults, matchAreas, withArrow: true);
         }
 
         if (state.ShowContextMatches && state.ContextResults != null && state.ContextResults.Count > 0)
@@ -156,14 +156,14 @@ public class PanelRenderer
 
             ty += 35;
 
-            ty = this.DrawMatchRows(gr, tx, ty, panelRect.Width, state.ContextResults, contextAreas);
+            ty = this.DrawMatchRows(gr, tx, ty, panelRect.Width, state.ContextResults, contextAreas, false  );
         }
 
         int finalHeight = ty - panelRect.Y + 10;
         return new PanelDrawResult(finalHeight, matchAreas, contextAreas);
     }
 
-    private int DrawMatchRows(Graphics gr, int tx, int ty, int panelWidth, IReadOnlyList<MatchResponse> matches, List<MatchClickArea> areas)
+    private int DrawMatchRows(Graphics gr, int tx, int ty, int panelWidth, IReadOnlyList<MatchResponse> matches, List<MatchClickArea> areas, bool withArrow)
     {
         foreach (var m in matches)
         {
@@ -174,7 +174,7 @@ public class PanelRenderer
             string dateStr = matchDt.ToString("yyyy-MM-dd");
             areas.Add(new MatchClickArea(rect, dateStr));
 
-            gr.DrawString($"{dateStr} (M:{m.Similarity:F1}%)", this._dataFont, Brushes.Gray, tx, ty);
+            gr.DrawString($"{dateStr} (M:{m.Similarity:F1}%) {(withArrow ? (m.NextCandleUp > m.NextCandleDown ? "↑" : "↓") : "")}", this._dataFont, Brushes.Gray, tx, ty);
             ty += 18;
         }
         return ty;
