@@ -40,7 +40,7 @@ public class SessionBarReader
         int londonTime = londonNow.Hour * 100 + londonNow.Minute;
         int nyTime = nyNow.Hour * 100 + nyNow.Minute;
 
-        if (londonTime >= 800 && londonTime < 1425 && nyTime < 930) return "LONDON_OPEN";
+        if (londonTime >= 800 && londonTime < 1200) return "LONDON_OPEN";
         if (nyTime >= 930 && nyTime < 1705) return "NY_OPEN";
         return null;
     }
