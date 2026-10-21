@@ -72,7 +72,6 @@ pub struct NextCandleData {
 pub struct CachedResult {
     pub summary: AggregateData,
     pub matches: Arc<Vec<MatchResponse>>,
-    pub ai_analysis: Option<Arc<String>>,
     pub next_candle: NextCandleData,
 }
 
@@ -87,7 +86,6 @@ impl CachedResult {
         Self {
             summary,
             matches: Arc::new(matches),
-            ai_analysis: None,
             next_candle: NextCandleData {
                 avg_up: proj.avg_up,
                 avg_down: proj.avg_down,

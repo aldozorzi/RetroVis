@@ -5,7 +5,6 @@ use axum::{
 use std::sync::Arc;
 use std::collections::{HashMap, HashSet};
 use chrono::NaiveTime;
-use dotenvy::dotenv;
 use std::thread;
 
 mod models;
@@ -29,7 +28,6 @@ use visualize::visualize_handler;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     clear_terminal();
     println!("----- STARTING RetroVis SERVER -----");
-    dotenv().ok();
     let mut engines = HashMap::new();
 
     let nq = thread::spawn(|| parser::load_and_process("data/nq-M5.csv", "NQ").map_err(|e| e.to_string()));
