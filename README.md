@@ -267,8 +267,14 @@ Quantower/RetroVis/     C# Quantower indicator
 
 ## Configuration and secrets
 
-Local operation needs no API keys. If you use a `.env` file for development, it
-is already ignored by Git and must never be committed.
+Local operation needs no API keys. If you use a `.env` file for development,
+copy `.env.example` and fill in only the keys you need:
+
+```text
+cp .env.example .env
+```
+
+`.env` is ignored by Git and must never be committed.
 
 ## Disclaimer
 
