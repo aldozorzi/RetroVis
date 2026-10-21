@@ -3,6 +3,8 @@
 /Quantower/RetroVis/obj
 /Quantower/RetroVis/bin
 /.vs
+/.VSCodeCounter
+/Branding
 .env
 retro-vis.exe
 .cursor
